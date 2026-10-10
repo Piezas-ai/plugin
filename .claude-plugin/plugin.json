@@ -1,0 +1,10 @@
+{
+  "name": "piezas",
+  "version": "0.2.0",
+  "description": "Build business apps with Piezas from your AI coding tool: plain-language interview, clickable preview, and guardrails that keep the app on Piezas.",
+  "author": {
+    "name": "Piezas.ai",
+    "url": "https://piezas.ai"
+  },
+  "homepage": "https://piezas.ai"
+}
