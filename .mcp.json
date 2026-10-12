@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "piezas": {
+      "type": "http",
+      "url": "https://mcp.staging.piezas.ai/mcp/signin"
+    }
+  }
+}

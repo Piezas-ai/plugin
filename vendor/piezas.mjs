@@ -1519,22 +1519,15 @@ function deploySlugFor(projectDir, options) {
 // Returns null when nothing deployable exists (with build guidance).
 function stageArtifact(projectDir, stagingDir, options) {
   const copyInto = (src) => execSync(`cp -R ${JSON.stringify(src)}/. ${JSON.stringify(stagingDir)}/`);
-  // Whole-folder staging (--dir / project root) must never carry secrets or
-  // repo noise into the artifact: .env* stays local — ALWAYS — and .git is
-  // dead weight. Build-output paths (.next/standalone, out/, dist/) never
-  // contain these, so only folder staging needs the scrub.
-  const scrubStaging = () => {
-    for (const entry of readdirSync(stagingDir)) {
-      if (entry === '.git' || entry === '.env' || entry.startsWith('.env.')) {
-        rmSync(join(stagingDir, entry), { recursive: true, force: true });
-      }
-    }
-  };
+  // Every artifact is scrubbed, whatever its shape: no .env or .env.* file
+  // (examples included) and no .git, at ANY depth. Build output is not clean
+  // by itself: `next build` with output: "standalone" copies the project's
+  // .env files into .next/standalone/, and server.js loads them at startup.
+  const done = (result) => (result ? { ...result, removed: scrubArtifact(stagingDir) } : null);
   const stageFolder = (src, source) => {
     copyInto(src);
-    scrubStaging();
-    if (existsSync(resolve(stagingDir, 'server.js'))) return { kind: 'server', source };
-    if (existsSync(resolve(stagingDir, 'index.html'))) return { kind: 'static', source };
+    if (existsSync(resolve(stagingDir, 'server.js'))) return done({ kind: 'server', source });
+    if (existsSync(resolve(stagingDir, 'index.html'))) return done({ kind: 'static', source });
     return null; // has neither entry file -> caller explains
   };
 
@@ -1556,7 +1549,7 @@ function stageArtifact(projectDir, stagingDir, options) {
     if (existsSync(publicDir)) {
       execSync(`cp -R ${JSON.stringify(publicDir)} ${JSON.stringify(resolve(stagingDir, 'public'))}`);
     }
-    return { kind: 'server', source: 'next standalone' };
+    return done({ kind: 'server', source: 'next standalone' });
   }
 
   // Static exports: Next `output: "export"` writes out/, Vite writes dist/.
@@ -1564,7 +1557,7 @@ function stageArtifact(projectDir, stagingDir, options) {
     const src = resolve(projectDir, candidate);
     if (existsSync(resolve(src, 'index.html'))) {
       copyInto(src);
-      return { kind: 'static', source: `${candidate}/` };
+      return done({ kind: 'static', source: `${candidate}/` });
     }
   }
 
@@ -1574,6 +1567,30 @@ function stageArtifact(projectDir, stagingDir, options) {
     return stageFolder(projectDir, 'project root');
   }
   return null;
+}
+
+// scrubArtifact removes local-only files from a staged artifact, at any depth:
+// every .env and .env.* (templates like .env.example too: the running app
+// never needs them, and people do put real values in them) and every .git.
+// Symlinks are removed as entries, never followed. Returns the removed paths,
+// relative to the artifact root, for the one-line notice.
+export function scrubArtifact(root) {
+  const removed = [];
+  const walk = (dir) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.name === '.git' || entry.name === '.env' || entry.name.startsWith('.env.')) {
+        rmSync(full, { recursive: true, force: true });
+        removed.push(relative(root, full));
+      } else if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        walk(full);
+      }
+    }
+  };
+  walk(root);
+  return removed.sort();
 }
 
 // detectStaleBuild (CLI-1): `deploy` ships the LAST build as-is — it never
@@ -2278,6 +2295,10 @@ export async function deploy(options = {}) {
       return { exitCode: 1, command: 'deploy', status: 'too-large' };
     }
     log(`  Packaged ${staged.kind} app from ${staged.source} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+    if (staged.removed?.length) {
+      const envFiles = staged.removed.filter((p) => !p.split('/').includes('.git'));
+      if (envFiles.length) log(`  Left out ${envFiles.join(', ')} (local only), it is never uploaded.`);
+    }
 
     const appName = linked.appName;
 
