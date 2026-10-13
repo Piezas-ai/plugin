@@ -39,7 +39,55 @@ function detail(message) {
   else log(message);
 }
 
-export const DEFAULT_API_BASE_URL = 'https://api.piezas.ai';
+// Which Piezas this computer talks to: production, unless someone signed in
+// with `piezas login --staging`, which saves the choice next to the sign-in
+// (target.json in the Piezas home folder). PIEZAS_TARGET overrides it, and
+// flags and PIEZAS_* addresses still win over these defaults. Every build is
+// the same; nothing environment-specific is baked in.
+export const TARGET_HOSTS = {
+  production: {
+    api: 'https://api.piezas.ai',
+    apps: 'https://apps.piezas.ai',
+    console: 'https://app.piezas.ai',
+    contract: 'https://mcp.piezas.ai/contract',
+  },
+  staging: {
+    api: 'https://api.staging.piezas.ai',
+    apps: 'https://apps.staging.piezas.ai',
+    console: 'https://app.staging.piezas.ai',
+    contract: 'https://mcp.staging.piezas.ai/contract',
+  },
+};
+function piezasHomeDir(env = process.env) {
+  return typeof env.PIEZAS_HOME === 'string' && env.PIEZAS_HOME.trim()
+    ? env.PIEZAS_HOME.trim()
+    : join(homedir(), '.piezas');
+}
+
+export function savedTarget(env = process.env) {
+  const fromEnv = typeof env.PIEZAS_TARGET === 'string' ? env.PIEZAS_TARGET.trim() : '';
+  if (TARGET_HOSTS[fromEnv]) return fromEnv;
+  try {
+    const saved = JSON.parse(readFileSync(join(piezasHomeDir(env), 'target.json'), 'utf-8')).target;
+    if (TARGET_HOSTS[saved]) return saved;
+  } catch { /* absent or unreadable: production */ }
+  return 'production';
+}
+
+function saveTarget(target, env = process.env) {
+  const file = join(piezasHomeDir(env), 'target.json');
+  if (target === 'production') {
+    rmSync(file, { force: true });
+    return;
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ target }, null, 2)}\n`);
+}
+
+export const ACTIVE_TARGET = savedTarget();
+const TARGET = TARGET_HOSTS[ACTIVE_TARGET];
+
+export const DEFAULT_API_BASE_URL = TARGET.api;
 // The platform contract — the rules a coding agent must follow — and the
 // spec-first workflow are SERVED by the Piezas MCP service, and those endpoints
 // are canonical. This CLI is a THIN CLIENT: it fetches both docs live at init
@@ -47,7 +95,7 @@ export const DEFAULT_API_BASE_URL = 'https://api.piezas.ai';
 // not a CLI republish. A fetch miss aborts init with a clear message — there is
 // no local fallback, because a stale local copy is actively misleading.
 // PIEZAS_CONTRACT_URL points the CLI at a different contract (for testing).
-export const DEFAULT_CONTRACT_URL = 'https://mcp.piezas.ai/contract';
+export const DEFAULT_CONTRACT_URL = TARGET.contract;
 // The contract fetch sits in front of `init`'s first output and doctor's
 // summary — it must never be something a user waits on. Short, hard cap.
 const CONTRACT_TIMEOUT_MS = 5_000;
@@ -1048,17 +1096,25 @@ function writeCredentials(credentials, env = process.env) {
 
 // fetchJson: built-in fetch with a hard timeout and JSON parse guards.
 // Non-2xx statuses are returned (not thrown); network errors/timeouts throw.
-async function fetchJson(fetchFn, url, { method = 'GET', body, token, timeoutMs = HTTP_TIMEOUT_MS } = {}) {
+// form sends a form-encoded body instead, as the OAuth endpoints require.
+async function fetchJson(fetchFn, url, { method = 'GET', body, form, token, timeoutMs = HTTP_TIMEOUT_MS } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const headers = { accept: 'application/json' };
-    if (body !== undefined) headers['content-type'] = 'application/json';
+    let payload;
+    if (form !== undefined) {
+      headers['content-type'] = 'application/x-www-form-urlencoded';
+      payload = new URLSearchParams(form).toString();
+    } else if (body !== undefined) {
+      headers['content-type'] = 'application/json';
+      payload = JSON.stringify(body);
+    }
     if (token) headers.authorization = `Bearer ${token}`;
     const response = await fetchFn(url, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: payload,
       signal: controller.signal,
     });
     let data;
@@ -1100,6 +1156,97 @@ function printUserCode(userCode) {
 }
 
 const LOGIN_RETRY_HINT = 'Run `npx piezas login` to get a new code.';
+
+// The CLI is admin-api's `piezas-cli` public client (RFC 8628 device grant).
+const CLI_CLIENT_ID = 'piezas-cli';
+const DEVICE_CODE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
+// RFC 8628 §3.5: every slow_down adds 5 seconds to the polling interval.
+const SLOW_DOWN_STEP_MS = 5000;
+
+// A device flow starts a sign-in and polls it. start() resolves to
+// { status, device }, device set only on success. poll() resolves to { state }:
+// 'ok' (with credentials), 'pending', 'slow_down', 'gone' or 'failed' (with
+// the HTTP status).
+
+// oauthDeviceFlow speaks RFC 8628 to admin-api's OAuth server.
+function oauthDeviceFlow(fetchFn, admin, timeoutMs) {
+  return {
+    async start() {
+      const res = await fetchJson(fetchFn, `${admin}/oauth/device_authorization`, {
+        method: 'POST',
+        form: { client_id: CLI_CLIENT_ID },
+        timeoutMs,
+      });
+      const data = res.status === 200 ? res.data : undefined;
+      return {
+        status: res.status,
+        device: data && {
+          deviceCode: data.device_code,
+          userCode: data.user_code,
+          verificationUri: data.verification_uri,
+          interval: data.interval,
+          expiresIn: data.expires_in,
+        },
+      };
+    },
+    async poll(deviceCode) {
+      const res = await fetchJson(fetchFn, `${admin}/oauth/token`, {
+        method: 'POST',
+        form: { grant_type: DEVICE_CODE_GRANT, device_code: deviceCode, client_id: CLI_CLIENT_ID },
+        timeoutMs,
+      });
+      if (res.status === 200 && typeof res.data?.access_token === 'string') {
+        return {
+          state: 'ok',
+          credentials: {
+            cliToken: res.data.access_token,
+            tenantId: res.data.tenant_id,
+            tenantName: res.data.tenant_name,
+            email: res.data.email,
+          },
+        };
+      }
+      if (res.status === 429 || res.status >= 500) return { state: 'pending' }; // transient
+      // A 401/403 (e.g. invalid_client) cannot succeed on a later poll.
+      if (res.status !== 400) return { state: 'failed', status: res.status };
+      if (res.data?.error === 'authorization_pending') return { state: 'pending' };
+      if (res.data?.error === 'slow_down') return { state: 'slow_down' };
+      return { state: 'gone' }; // expired_token, invalid_grant, access_denied, ...
+    },
+  };
+}
+
+// legacyDeviceFlow is admin-api's /v1/portal/device-codes API, for a server
+// without /oauth/device_authorization. Remove it with those routes.
+function legacyDeviceFlow(fetchFn, admin, timeoutMs) {
+  return {
+    async start() {
+      const res = await fetchJson(fetchFn, `${admin}/v1/portal/device-codes`, { method: 'POST', timeoutMs });
+      return { status: res.status, device: res.status === 201 ? res.data : undefined };
+    },
+    async poll(deviceCode) {
+      const res = await fetchJson(fetchFn, `${admin}/v1/portal/device-codes/token`, {
+        method: 'POST',
+        body: { deviceCode },
+        timeoutMs,
+      });
+      if (res.status === 200 && res.data?.status === 'ok' && typeof res.data.cliToken === 'string') {
+        return {
+          state: 'ok',
+          credentials: {
+            cliToken: res.data.cliToken,
+            tenantId: res.data.tenantId,
+            tenantName: res.data.tenantName,
+            email: res.data.email,
+          },
+        };
+      }
+      if (res.status === 200) return { state: 'pending' };
+      if (res.status === 404 || res.status === 400) return { state: 'gone' };
+      return { state: 'pending' }; // transient
+    },
+  };
+}
 
 // offerBrowserOpen offers "hit ENTER to open the browser" WITHOUT blocking the
 // approval poll: polling runs concurrently, so approving via the pasted link
@@ -1156,17 +1303,23 @@ export async function login(options = {}) {
 async function runLogin(options) {
   const env = options.env ?? process.env;
   const fetchFn = options.fetchFn ?? fetch;
-  const apiBase = resolveApiBase(options, env);
+  // --staging / --production choose which Piezas to sign in to, and the choice
+  // is saved with the sign-in so every later command follows it.
+  const hosts = options.target ? TARGET_HOSTS[options.target] : TARGET;
+  const apiBase = resolveApiBase(options, env, hosts.api);
   const admin = adminBaseUrl(apiBase);
 
-  log('\n  🧱 Piezas login\n');
+  log(`\n  🧱 Piezas login${options.target === 'staging' ? ' (staging)' : ''}\n`);
 
+  let flow = oauthDeviceFlow(fetchFn, admin, options.httpTimeoutMs);
   let start;
   try {
-    start = await fetchJson(fetchFn, `${admin}/v1/portal/device-codes`, {
-      method: 'POST',
-      timeoutMs: options.httpTimeoutMs,
-    });
+    start = await flow.start();
+    // Only a missing route falls back; any other refusal is reported as is.
+    if (start.status === 404) {
+      flow = legacyDeviceFlow(fetchFn, admin, options.httpTimeoutMs);
+      start = await flow.start();
+    }
   } catch (error) {
     log(`  Could not reach ${apiBase} (${error?.message || 'network error'}). Check your connection and try again.`);
     return { exitCode: 1, summary: { command: 'login', status: 'error', error: 'unreachable', apiBase } };
@@ -1176,13 +1329,13 @@ async function runLogin(options) {
     log('  Too many sign-in requests are pending right now - wait a few minutes and try again.');
     return { exitCode: 1, summary: { command: 'login', status: 'error', error: 'rate-limited', apiBase } };
   }
-  const device = start.data;
-  if (start.status !== 201 || !device || typeof device.deviceCode !== 'string' || typeof device.userCode !== 'string') {
+  const { device } = start;
+  if (!device || typeof device.deviceCode !== 'string' || typeof device.userCode !== 'string') {
     log(`  Sign-in could not be started (HTTP ${start.status}). Try again in a moment.`);
     return { exitCode: 1, summary: { command: 'login', status: 'error', error: `http-${start.status}`, apiBase } };
   }
 
-  const verificationUri = device.verificationUri || 'https://app.piezas.ai/device';
+  const verificationUri = device.verificationUri || `${hosts.console}/device`;
   const confirmUrl = `${verificationUri}${verificationUri.includes('?') ? '&' : '?'}code=${encodeURIComponent(device.userCode)}`;
 
   log('  Confirm this code in your browser to sign in:');
@@ -1192,10 +1345,18 @@ async function runLogin(options) {
   log(`  ${confirmUrl}`);
   log('');
   const opener = options.openBrowserFn ?? openInBrowser;
+  // --open (and any run by an AI tool, where nobody can press ENTER) opens the
+  // browser straight away; the code and link above stay printed either way.
+  if (options.open) {
+    opener(confirmUrl);
+    log('  Your browser is opening. Check the code matches, then click Approve.');
+    log('');
+  }
   // Offer to open the browser (npm/gh style — never auto-hijack). Interactive when
   // the caller says so (main() passes it based on a real TTY) or provides a
   // promptFn; --json and interactive:false stay hands-off and just print the link.
   const wantsPrompt =
+    !options.open &&
     options.interactive !== false &&
     !options.json &&
     (options.interactive === true ||
@@ -1208,8 +1369,9 @@ async function runLogin(options) {
     : () => {};
   log('  Waiting for approval...');
 
-  const intervalMs = options.pollIntervalMs
+  let intervalMs = options.pollIntervalMs
     ?? (Number(device.interval) > 0 ? Number(device.interval) : 5) * 1000;
+  const slowDownMs = options.slowDownMs ?? SLOW_DOWN_STEP_MS;
   const lifetimeMs = (Number(device.expiresIn) > 0 ? Number(device.expiresIn) : 900) * 1000;
   const deadline = Date.now() + lifetimeMs;
 
@@ -1218,24 +1380,15 @@ async function runLogin(options) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, intervalMs));
       let poll;
       try {
-        poll = await fetchJson(fetchFn, `${admin}/v1/portal/device-codes/token`, {
-          method: 'POST',
-          body: { deviceCode: device.deviceCode },
-          timeoutMs: options.httpTimeoutMs,
-        });
+        poll = await flow.poll(device.deviceCode);
       } catch {
         continue; // transient network trouble — keep polling until expiry
       }
 
-      if (poll.status === 200 && poll.data?.status === 'ok' && typeof poll.data.cliToken === 'string') {
-        const credentials = {
-          cliToken: poll.data.cliToken,
-          tenantId: poll.data.tenantId,
-          tenantName: poll.data.tenantName,
-          email: poll.data.email,
-          apiBase,
-        };
+      if (poll.state === 'ok') {
+        const credentials = { ...poll.credentials, apiBase };
         const credentialsPath = writeCredentials(credentials, env);
+        if (options.target) saveTarget(options.target, env);
         log('');
         log(`  Logged in as ${credentials.email}${credentials.tenantName ? ` (${credentials.tenantName})` : ''}.`);
         log(`  Session saved to ${credentialsPath}`);
@@ -1253,12 +1406,19 @@ async function runLogin(options) {
           },
         };
       }
-      if (poll.status === 200) continue; // pending
-      if (poll.status === 404 || poll.status === 400) {
+      if (poll.state === 'failed') {
+        log(`  Sign-in failed (HTTP ${poll.status}). ${LOGIN_RETRY_HINT}`);
+        return { exitCode: 1, summary: { command: 'login', status: 'error', error: `http-${poll.status}`, apiBase } };
+      }
+      if (poll.state === 'slow_down') {
+        intervalMs += slowDownMs;
+        continue;
+      }
+      if (poll.state === 'gone') {
         log(`  This sign-in code is no longer valid (expired or already used). ${LOGIN_RETRY_HINT}`);
         return { exitCode: 1, summary: { command: 'login', status: 'expired', apiBase } };
       }
-      // Any other status (e.g. a transient 5xx) — keep polling until expiry.
+      // Pending, including a transient 429/5xx — keep polling until expiry.
     }
 
     log(`  The sign-in code expired before it was approved. ${LOGIN_RETRY_HINT}`);
@@ -1311,6 +1471,23 @@ export async function logout(options = {}) {
   return { exitCode: 0, ...summary };
 }
 
+// signInStatus: is this computer signed in to the Piezas this setup talks to?
+// A session for a different Piezas (say production, when this build targets
+// staging) does not count: commands would send its token to the wrong place.
+export function signInStatus(env = process.env) {
+  const credentials = readCredentials(env);
+  const target = resolveApiBase({}, env, TARGET_HOSTS[savedTarget(env)].api);
+  if (!credentials) return { signedIn: false, target };
+  const apiBase = (credentials.apiBase ?? DEFAULT_API_BASE_URL).replace(/\/+$/, '');
+  return {
+    signedIn: apiBase === target,
+    otherPiezas: apiBase === target ? undefined : apiBase,
+    email: credentials.email ?? null,
+    tenantName: credentials.tenantName ?? null,
+    target,
+  };
+}
+
 export function whoami(options = {}) {
   const env = options.env ?? process.env;
   const credentials = readCredentials(env);
@@ -1331,6 +1508,7 @@ export function whoami(options = {}) {
     tenantName: credentials.tenantName ?? null,
     email: credentials.email ?? null,
     apiBase: credentials.apiBase ?? DEFAULT_API_BASE_URL,
+    matchesThisSetup: signInStatus(env).signedIn,
   };
   if (options.json) {
     console.log(JSON.stringify(summary, null, 2));
@@ -1339,6 +1517,9 @@ export function whoami(options = {}) {
     console.log(`  Tenant: ${summary.tenantName ?? 'unknown'}${summary.tenantId ? ` (${summary.tenantId})` : ''}`);
     console.log(`  Email:  ${summary.email ?? 'unknown'}`);
     console.log(`  API:    ${summary.apiBase}\n`);
+    if (!summary.matchesThisSetup) {
+      console.log(`  This setup uses ${resolveApiBase({}, env)}. Run \`piezas login\` to sign in there.\n`);
+    }
   }
   return { exitCode: 0, ...summary };
 }
@@ -1473,7 +1654,7 @@ async function resolveKeyViaLogin(projectDir, options) {
 
 // --- piezas deploy: ship the built app to the shared apps server ----------
 
-const DEFAULT_APPS_URL = 'https://apps.piezas.ai';
+const DEFAULT_APPS_URL = TARGET.apps;
 const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000; // uploads can be slow; be patient
 // Client-side artifact cap — a FAST-FAIL courtesy so an oversized bundle is
 // caught before a slow upload. Piezas hosting enforces its own limit
@@ -5443,6 +5624,25 @@ export function sandboxFetch(projectDir, inner = fetch) {
   };
 }
 
+// signInContext tells the AI, at session start, whether this computer is
+// signed in to the Piezas this setup uses, and what to do when it is not:
+// sign in FIRST (the AI runs login; the person only clicks Approve), and never
+// carry on with a real Piezas step without an account.
+export function signInContext(env = process.env, cliPath) {
+  const status = signInStatus(env);
+  const cmd = cliPath ? `node "${cliPath}"` : 'npx piezas';
+  if (status.signedIn) {
+    return `Signed in to Piezas as ${status.email ?? 'unknown'}${status.tenantName ? ` (${status.tenantName})` : ''}.`;
+  }
+  return [
+    `Not signed in to Piezas${status.otherPiezas ? ` here (the saved sign-in is for ${status.otherPiezas})` : ''}.`,
+    `Before any Piezas step (creating the app, settings, deploy), run \`${cmd} login\` yourself with the shell tool and a long timeout (up to 10 minutes).`,
+    'It opens the person\'s browser. Tell them in one sentence: "Your browser is opening a Piezas page. Check the code matches and click Approve."',
+    'Wait for it to finish, then continue. Never carry on with a real Piezas step without an account.',
+    'Only if the person explicitly asks to try without an account, use practice mode (init --sandbox) and say plainly that nothing real is created.',
+  ].join(' ');
+}
+
 // connect — the socket the sign-in piece plugs into. Today it only explains.
 export function connectApp(startDir = process.cwd()) {
   const sandbox = isSandboxProject(startDir);
@@ -6720,6 +6920,7 @@ export async function phaseHook(payload, options = {}) {
     }
 
     if (event === 'SessionStart') {
+      const signInLine = signInContext(options.env ?? process.env, options.cliPath);
       const cliLine = options.cliPath
         ? `Piezas command (run it with the shell tool): node "${options.cliPath}" <args> — e.g. node "${options.cliPath}" phase status --context. ` +
           `Wherever a Piezas message says \`npx piezas ...\`, run node "${options.cliPath}" ... instead.`
@@ -6729,7 +6930,7 @@ export async function phaseHook(payload, options = {}) {
           0,
           hookContext(
             'SessionStart',
-            ['The Piezas plugin is installed. If the user wants to build a business app (bookings, CRM, intake, projects, a client portal), use the piezas skill to guide them.', cliLine]
+            ['The Piezas plugin is installed. If the user wants to build a business app (bookings, CRM, intake, projects, a client portal), use the piezas skill to guide them.', signInLine, cliLine]
               .filter(Boolean)
               .join('\n'),
           ),
@@ -6739,14 +6940,14 @@ export async function phaseHook(payload, options = {}) {
       const gaps = gateGaps(root, state);
       const sandbox = isSandboxProject(root);
       const manifest = sandbox ? readManifestSafe(root) : null;
-      const appUrl = manifest?.deploy?.url || (manifest?.appName ? `https://${slugifyAppName(manifest.appName)}.apps.piezas.ai` : '');
+      const appUrl = manifest?.deploy?.url || (manifest?.appName ? `https://${slugifyAppName(manifest.appName)}.${new URL(DEFAULT_APPS_URL).host}` : '');
       const parts = [
         `[Piezas] This project is a Piezas app. ${STEP_NAMES[state.phase]}.`,
         PLAIN_LANGUAGE,
         sandbox
           ? `${SANDBOX_NOTE} Use the normal Piezas commands (init, deploy, env, status); they run against the simulator. ` +
             `The app's address will be ${appUrl} (simulated). The running app's own data calls cannot reach real Piezas until it is connected, so test screens with sample data.`
-          : '',
+          : signInLine,
         cliLine,
         readRuleFile(options.rulesDir, 'core'),
         options.rulesDir
@@ -6836,6 +7037,7 @@ function help() {
   console.log('  Usage:');
   console.log('    npx piezas init [dir]            Set up Piezas in a project');
   console.log('    npx piezas login                 Sign in via your browser (device code)');
+  console.log('    npx piezas login --staging       Sign in to Piezas staging (later commands follow; --production switches back)');
   console.log('    npx piezas logout                Remove the saved CLI session');
   console.log('    npx piezas whoami                Show which account the CLI is signed in as');
   console.log('    npx piezas deploy                Ship your built app to <app>.apps.piezas.ai');
@@ -6935,7 +7137,7 @@ const DEPLOY_FLAG_KEYS = new Set([
   'app', 'appsUrl', 'cmd', 'delete', 'dir', 'env', 'isolated', 'logs', 'mixed', 'status',
 ]);
 const ENV_FLAG_KEYS = new Set(['app', 'appsUrl', 'allowEmpty']);
-const LOGIN_FLAG_KEYS = new Set(['apiBase', 'json']);
+const LOGIN_FLAG_KEYS = new Set(['apiBase', 'json', 'open', 'staging', 'production']);
 const SESSION_FLAG_KEYS = new Set(['json']);
 
 function kebabCase(flagKey) {
@@ -7051,12 +7253,15 @@ export async function main(argv = process.argv, currentDir = process.cwd()) {
       return usageError('--api-base requires a value');
     }
     try {
+      if (flags.staging && flags.production) return usageError('choose one of --staging or --production');
       const result = await login({
         apiBase: lastValue(flags.apiBase),
+        target: flags.staging ? 'staging' : flags.production ? 'production' : undefined,
         json: Boolean(flags.json),
         // Real terminal → prompt before opening the browser; piped/non-TTY → just
         // print the link (no prompt to hang on).
         interactive: Boolean(process.stdin.isTTY),
+        open: Boolean(flags.open) || agentHost() !== null,
       });
       return result.exitCode;
     } catch (error) {

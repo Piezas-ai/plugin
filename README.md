@@ -12,11 +12,11 @@ bookings", and the plugin turns that into a guided, plain-language build:
 4. **Build it.** The agent writes the real Piezas code.
 5. **Go live.** `piezas deploy`.
 
-**Sandbox.** Until Piezas sign-in for coding tools is available, new projects run
-on a simulated Piezas. The commands, checks and packaging are the real ones and
-the app gets a real-shaped address (`<name>.apps.piezas.ai`), but nothing is
-created or published. When sign-in is available, the app is connected and the
-same commands reach the real platform.
+**Signing in.** The first time, the plugin signs you in to your Piezas account:
+your browser opens a Piezas page, you check the code and click Approve. That one
+sign-in covers creating the app, its settings and going live. Want to try first
+without an account? Ask for practice mode: everything runs on a simulated Piezas
+and nothing is created or published.
 
 ## Install
 

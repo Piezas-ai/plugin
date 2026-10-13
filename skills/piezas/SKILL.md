@@ -27,20 +27,26 @@ Your session context has a line starting `Piezas command`. It gives the exact
 `node "<path>/piezas.mjs"` command to run with the shell tool. Use it wherever
 these instructions say **piezas**. Never use `npx piezas`.
 
-## Sandbox: Piezas is simulated for now
+## Sign in first
 
-Piezas sign-in for coding tools has not shipped yet, so new projects run on a
-**sandbox**: a simulated Piezas inside the project.
+Everything real (creating the app, its settings, going live) needs their Piezas
+account. Your session context says whether this computer is signed in.
 
-- The commands are the real ones (init, deploy, env, status). They answer as
-  Piezas would:
-  - a real-shaped app with its own address, `<name>.apps.piezas.ai`
-  - an API key and hosted settings
-  - deployments
-- **Nothing is created or published.**
-- Tell the user once, plainly: "Your app is set up on a practice version of
-  Piezas. Everything works the same way; when your Piezas account is connected,
-  it goes live for real."
+- **Not signed in:** before any other step, run `piezas login` yourself with the
+  shell tool and a long timeout (up to 10 minutes). It opens their browser.
+  Tell them in one sentence: "Your browser is opening a Piezas page. Check the
+  code matches and click Approve." Wait for it to finish, then carry on.
+- If it fails or the code expires, say so in one sentence and run it again.
+- **Never carry on without an account.** Do not quietly switch to anything else.
+- To check at any time: `piezas whoami`.
+- **Staging (testing only):** if the person asks to use Piezas staging or the
+  test environment, sign in with `piezas login --staging` instead. Everything
+  after that (creating the app, settings, deploy) goes to staging on its own.
+  `piezas login --production` switches back. Never suggest staging yourself.
+
+**Practice mode** is only for someone who explicitly asks to try Piezas without
+an account. Then add `--sandbox` to `piezas init`, and tell them once: "This is
+a practice version of Piezas. Nothing real is created or published."
 
 ## Starting
 
@@ -49,7 +55,8 @@ with the same questions and the same messages. Keep it that way.
 
 1. Run `piezas phase status --context`. If a project exists, tell them where
    things stand in one sentence and continue from that step.
-2. If there is no project, ask first, exactly once:
+2. Make sure they are signed in (see "Sign in first").
+3. If there is no project, ask first, exactly once:
    **"Starting fresh, or do you already have an app?"**
    (Mention that "an app" can be something built with Lovable, Claude Code, a
    freelancer, or anything else.)
@@ -59,7 +66,8 @@ with the same questions and the same messages. Keep it that way.
 1. Ask what the app should be called (one question).
 2. Use the current folder if it is empty or only has their notes. Otherwise
    ask once whether to create a new folder.
-3. Run `piezas init --sandbox --short-rules --app "<App name>" --yes`.
+3. Run `piezas init --short-rules --app "<App name>" --yes`. This creates the
+   app in their Piezas account and connects this folder to it.
 4. Tell them their app exists, what its address will be, and that step 1 is
    describing it.
 
@@ -69,7 +77,8 @@ with the same questions and the same messages. Keep it that way.
    drag the folder into the chat. For now only a folder on their computer works;
    if the code is only on GitHub or Lovable, ask them to download it first
    (Lovable: connect GitHub, then download the code as a ZIP and unzip it).
-2. Run `piezas init --import "<folder>" --sandbox --short-rules --yes`.
+2. Run `piezas init --import "<folder>" --short-rules --app "<App name>" --yes`
+   (ask for the app's name first if you do not know it).
    - It **copies** the app. Their original folder is never changed. Tell them so.
    - Installed packages, history, build output and private settings (`.env`
      files) are left out on purpose.
@@ -161,18 +170,14 @@ is done, and `piezas import scan` shows what is left.
    running). Then run `piezas preview open`. The "Watch it work" section is
    their proof that the app does what was agreed.
 
-In a sandbox, the app's own data calls cannot reach real Piezas. The key is a
-sandbox key. Keep sample data available so the screens still work locally, and
-tell the user that real data arrives when the account is connected.
+In practice mode only: the app's own data calls cannot reach real Piezas. Keep
+sample data available so the screens still work locally.
 
 ## Step 4 — Go live
 
 1. Build the app.
-2. Run `piezas deploy`. In a sandbox this is a full rehearsal:
-   - the real checks
-   - the real packaging
-   - the required settings
-   - a simulated deployment that returns the app's address
+2. Run `piezas deploy`. It checks the app, packages it, and puts it live at
+   its address.
 3. If a required setting is missing, set it with `piezas env set NAME=value`
    after asking the user for the value. Never invent secrets.
 4. If the deploy **pauses** because the app breaks a Piezas rule (its own local
@@ -183,8 +188,8 @@ tell the user that real data arrives when the account is connected.
    - Only if they still want this version live, they reply with the exact words
      **deploy anyway**. Their message records the confirmation. You can never
      confirm for them. Then run `piezas deploy` again.
-5. Tell them the address, and say plainly that in the sandbox nothing was
-   published. Connecting the account makes it real with the same steps.
+5. Tell them the address and suggest they open it. (In practice mode, say
+   plainly that nothing was published.)
 
 ## Rules that never bend
 
