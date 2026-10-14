@@ -54,7 +54,12 @@ The terminal (`piezas init`) and this plugin are two ways into the same steps,
 with the same questions and the same messages. Keep it that way.
 
 1. Run `piezas phase status --context`. If a project exists, tell them where
-   things stand in one sentence and continue from that step.
+   things stand in one sentence and continue from that step. If the app is
+   already live, also run `piezas reports`: when it lists new reports, say
+   **"N new problem reports. Fix them?"** If yes, run `piezas reports --save`
+   and fix everything in `.piezas/reports/` together. For each report, look
+   at its screenshot (`<id>.jpg`) first, then read `<id>.md`: what they wrote,
+   the page, and the errors and failed requests the page had.
 2. Make sure they are signed in (see "Sign in first").
 3. If there is no project, ask first, exactly once:
    **"Starting fresh, or do you already have an app?"**
@@ -163,9 +168,13 @@ is done, and `piezas import scan` shows what is left.
 1. Read the rules file for each Piezas service before you use it. The paths are
    in your session context.
 2. Write the real Piezas code with `@piezas/sdk`: records, sign-in, and so on.
-3. Write one test per scenario in the description.
-4. Run `piezas doctor` and fix what it reports.
-5. When the tests pass, record a short clip of each journey:
+3. Add the Report a problem button (the snippet is in
+   `.piezas/rules/patterns.md`, "Report a Problem Button"). Always add it and
+   never remove it: whether it shows is switched at each deploy. Apps with no
+   server skip it.
+4. Write one test per scenario in the description.
+5. Run `piezas doctor` and fix what it reports.
+6. When the tests pass, record a short clip of each journey:
    `piezas preview clips` (add `--url <address>` if the app is already
    running). Then run `piezas preview open`. The "Watch it work" section is
    their proof that the app does what was agreed.
@@ -175,12 +184,21 @@ sample data available so the screens still work locally.
 
 ## Step 4 — Go live
 
-1. Build the app.
-2. Run `piezas deploy`. It checks the app, packages it, and puts it live at
-   its address.
-3. If a required setting is missing, set it with `piezas env set NAME=value`
-   after asking the user for the value. Never invent secrets.
-4. If the deploy **pauses** because the app breaks a Piezas rule (its own local
+1. Before **every** deploy, ask: **"Keep the Report a problem button on?
+   (yes/no)"** (Anyone using the app can use it to tell you what went wrong.)
+   Wait for their reply and never answer it yourself.
+2. Build the app.
+3. Run `piezas deploy --report-button on` if they said yes, or
+   `--report-button off` if they said no. It checks the app, packages it, and
+   puts it live at its address. A deploy without their answer is refused.
+4. If a required setting is missing (the deploy stops and names it, or
+   `piezas env check` lists it), **never ask for the value in this chat** and
+   never set it yourself: a chat can be kept for a long time. Tell them, in one
+   short message, the names of what is missing and the two places to set them:
+   the app page link the command printed (Hosting -> Environment), or the
+   `npx piezas env set NAME=...` line to run in their own terminal. When they say
+   it is done, run `piezas env check`, then deploy again. Never invent values.
+5. If the deploy **pauses** because the app breaks a Piezas rule (its own local
    database, or the Piezas key visible in the browser):
    - Tell them in one plain sentence what is wrong and why it matters.
    - Offer to fix it. That is almost always the right answer, and during the
@@ -188,12 +206,18 @@ sample data available so the screens still work locally.
    - Only if they still want this version live, they reply with the exact words
      **deploy anyway**. Their message records the confirmation. You can never
      confirm for them. Then run `piezas deploy` again.
-5. Tell them the address and suggest they open it. (In practice mode, say
+6. Tell them the address and suggest they open it. (In practice mode, say
    plainly that nothing was published.)
 
 ## Rules that never bend
 
 These rules are enforced automatically, but follow them without being stopped:
+
+- **Never delete or take down an app**, and never offer to. Only the owner does
+  that, deliberately, from their own terminal or the console. If they ask, tell
+  them where in one sentence.
+- **Never handle secret values.** Keys, passwords and settings are set by the
+  owner on the app page or in their own terminal, never typed into this chat.
 
 - **No local database.** Business records live in Piezas.
 - **The Piezas key stays on the server.** Never put it in browser code or behind

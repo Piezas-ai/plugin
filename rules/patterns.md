@@ -22,6 +22,33 @@ export async function POST(request: Request) {
 
 Do not expose a generic path parameter like `/api/piezas/[...path]` unless every target is checked against a narrow allowlist.
 
+### Report a Problem Button
+
+Every app with a server gets a small "Report a problem" button in the bottom-left corner. Anyone using the app can drag it out of the way or click it to say what went wrong. Each report carries a screenshot of what the person saw (they can leave it out), the window size, and the page's last errors and failed requests. Reports are saved in the app's own records (entity `problem_reports`, status `new`), screenshots in the app's own Documents; `npx piezas reports --save` writes each one to `.piezas/reports/<id>.md` and `<id>.jpg`. When fixing a report, look at its screenshot first.
+
+Always add the button; never remove it from the code to turn it off. On or off is the owner's answer on every deploy: `piezas deploy --report-button on|off` sets the hosted setting `PIEZAS_REPORT_BUTTON`, and the app reads it at run time. Never answer that question for the owner.
+
+```tsx
+// app/api/piezas/report/route.ts
+import { Piezas, createReportProblemRoute } from '@piezas/sdk';
+const piezas = new Piezas({ apiKey: process.env.PIEZAS_API_KEY! });
+export const { GET, POST } = createReportProblemRoute({ piezas });
+```
+
+```tsx
+// app/report-problem.tsx
+'use client';
+import { useEffect } from 'react';
+import { mountReportProblem } from '@piezas/sdk/report-problem';
+export function ReportProblem() {
+  useEffect(() => mountReportProblem(), []);
+  return null;
+}
+// app/layout.tsx: render <ReportProblem /> once inside <body>.
+```
+
+Other frameworks: call `mountReportProblem()` once in the browser and serve the route's `GET` and `POST` at `/api/piezas/report` (pass `{ endpoint }` if the route differs). Static-only apps have no server to save reports, so they do not get the button.
+
 ### OpenAPI Fallback Pattern
 
 Use SDK clients first. If a less common endpoint is not yet wrapped or you need to verify exact request/response details, read the service OpenAPI spec and call Piezas from server-side code. If you need a bearer token for direct REST, use the exported token provider:

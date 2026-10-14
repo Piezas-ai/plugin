@@ -78,6 +78,7 @@ on shipping:
 10. Keep secrets and API keys server-side.
 11. Build UI and workflow around Piezas references, not local backend tables.
 12. If MCP is needed, use `piezasMcp` from `@piezas/sdk` on a protected server route; do not add an MCP route to static-only apps.
+12a. Add the Report a Problem button to every app with a server (see Report a Problem Button). Whether it shows is decided at run time, not by the code.
 13. Write one `tests/scenarios/S-xxx.spec.*` test per acceptance scenario, plus focused tests for the app's orchestration logic and public/server route validation.
 14. Run `npx piezas doctor`; fix errors before claiming the app is ready.
 15. Run the scenario suite and get it green (`piezas test`) before deploying.

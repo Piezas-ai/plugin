@@ -1982,6 +1982,45 @@ function diagnoseNextBuild(projectDir) {
 // consciously types as --env KEY=VALUE (the Heroku config:set posture). This
 // is a security property, not a convenience trade-off: the CLI has no code
 // path that opens .env, so no bug or compromised release can exfiltrate it.
+// askReportButton gets this deploy's answer to "Keep the Report a problem
+// button on?" and saves it in the manifest as the next default.
+// Returns { ok: true, value: 'on'|'off' } or { ok: false, status }.
+export async function askReportButton(projectDir, options = {}) {
+  const manifestPath = resolve(projectDir, 'piezas.manifest.json');
+  let manifest = null;
+  try { manifest = readJsonFile(manifestPath); } catch { manifest = null; }
+  const last = manifest?.reportButton === false ? 'off' : 'on';
+  let value;
+  if (options.reportButton !== undefined) {
+    value = String(options.reportButton).trim().toLowerCase();
+    if (value !== 'on' && value !== 'off') {
+      log('  --report-button must be on or off.\n');
+      return { ok: false, status: 'report-button-invalid' };
+    }
+  } else if (options.interactive && options.promptFn !== null) {
+    const promptFn = options.promptFn ?? promptViaTerminal;
+    const hint = last === 'on' ? '(Y/n)' : '(y/N)';
+    const a = String((await promptFn(`  Keep the Report a problem button on? ${hint} `)) ?? '').trim().toLowerCase();
+    value = a === '' ? last : (a === 'y' || a === 'yes') ? 'on' : (a === 'n' || a === 'no') ? 'off' : null;
+    if (!value) {
+      log('  Please answer y or n. Nothing was deployed.\n');
+      return { ok: false, status: 'report-button-invalid' };
+    }
+  } else {
+    log('  Before every deploy the owner must be asked: keep the Report a problem button on?');
+    log('  Then deploy with --report-button on or --report-button off.\n');
+    return { ok: false, status: 'report-button-required' };
+  }
+  if (manifest) {
+    const before = manifest.reportButton;
+    if (value === 'off') manifest.reportButton = false;
+    else delete manifest.reportButton;
+    if (before !== manifest.reportButton) writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+  log(`  Report a problem button: ${value}`);
+  return { ok: true, value };
+}
+
 function collectExplicitEnv(options) {
   const sent = {};
   const pairs = Array.isArray(options.envPairs) ? options.envPairs : options.envPairs ? [options.envPairs] : [];
@@ -2343,6 +2382,14 @@ export async function deploy(options = {}) {
     } catch { /* unreachable -> the server-side check still holds */ }
   }
 
+  // The Report a problem button: the owner answers on EVERY deploy, and the
+  // answer travels as the hosted setting PIEZAS_REPORT_BUTTON, which the app
+  // reads at run time (no code change). Terminal: a prompt whose default is
+  // the last answer. Anywhere else (AI tools, CI): --report-button is
+  // required, because only the owner can answer.
+  const reportChoice = await askReportButton(projectDir, options);
+  if (!reportChoice.ok) return { exitCode: 1, command: 'deploy', status: reportChoice.status };
+
   // Env confirmation on EVERY interactive deploy — new code is exactly when
   // new variables appear, so the reminder rides along each time (one Enter
   // per deploy is cheap insurance against a drifted environment).
@@ -2490,6 +2537,8 @@ export async function deploy(options = {}) {
     // read: it belongs to local development.
     const sent = collectExplicitEnv(options);
     const sentNames = Object.keys(sent).sort();
+    // Not a secret and not a typed setting: the owner's on/off answer above.
+    sent.PIEZAS_REPORT_BUTTON = reportChoice.value;
     if (sentNames.length) {
       log(`  Env: sending ${sentNames.join(', ')} (typed via --env)`);
       const localish = sentNames.filter((k) => /localhost|127\.0\.0\.1/.test(String(sent[k])));
@@ -2515,7 +2564,7 @@ export async function deploy(options = {}) {
     if (required.length) {
       const effective = new Set([...serverKeys, ...Object.keys(sent)]);
       const missing = required.filter((k) => !effective.has(k));
-      log('  Hosted environment check (set at app.piezas.ai -> your app -> Hosting):');
+      log(`  Hosted settings check (names only; set at ${appConsoleUrl(linked.appId)} -> Hosting):`);
       for (const k of required) {
         const how = sent[k] !== undefined ? '(sending via --env)' : serverKeys.includes(k) ? '(set in console)' : 'NOT SET';
         log(`    ${effective.has(k) ? '✓' : '✗'} ${k}  ${how}`);
@@ -2542,9 +2591,9 @@ export async function deploy(options = {}) {
           log('  Not deploying — the app declares env it would boot without.');
           log('  Set the missing values first (either way works):');
         }
-        log(`    console:  app.piezas.ai -> your app -> Hosting -> Environment`);
-        log(`    terminal: npx piezas deploy ${missing.map((k) => `--env ${k}=...`).join(' ')}\n`);
-        return { exitCode: 1, command: 'deploy', status: 'missing-env', missing, likelyStaleSession };
+        for (const line of whereToSetLines(linked.appId, missing)) log(line);
+        log('  Then deploy again.\n');
+        return { exitCode: 1, command: 'deploy', status: 'missing-env', missing, likelyStaleSession, consoleUrl: appConsoleUrl(linked.appId) };
       }
     }
 
@@ -2578,14 +2627,30 @@ export async function deploy(options = {}) {
         }
       }
       if (!fixed) {
-        log('  Set it first (any of these), then deploy again:');
-        log('    console:   app.piezas.ai -> your app -> Hosting -> Environment');
-        log('    terminal:  npx piezas env set PIEZAS_API_KEY=sk_live_...');
-        log('    local dev: npx piezas init   (mints a key and writes your local .env)\n');
+        log('  Set it first, then deploy again:');
+        for (const line of whereToSetLines(linked.appId, ['PIEZAS_API_KEY'])) log(line);
+        log('    or, in your own terminal: npx piezas deploy  (offers to create and set the key for you)\n');
         return {
           exitCode: 1, command: 'deploy', status: 'missing-piezas-key',
           mintStatus: mint?.status, mintStage: mint?.stage,
         };
+      }
+    }
+
+    // The never-rules, checked here on the packaged build before anything is
+    // uploaded, the same way the hosting server checks it. An older server
+    // without that check still gets this pause. One owner confirmation covers
+    // both: the fingerprint is computed the same way on both sides.
+    const localFindings = scanArtifactHardNo(staging, staged.kind);
+    if (localFindings.length) {
+      const fingerprint = hardNoFingerprint(localFindings);
+      const confirmed = options.acknowledge || confirmedDeployRisk(projectDir);
+      if (confirmed !== fingerprint) {
+        return await deployNeedsConfirmation(projectDir, options, {
+          fingerprint,
+          hardNo: localFindings,
+          error: hardNoConfirmMessage(localFindings),
+        });
       }
     }
 
@@ -2666,6 +2731,195 @@ export async function deploy(options = {}) {
 // envCmd implements `piezas env ls|set KEY=VALUE|rm KEY` against the HOSTED
 // environment (the cloud store the app actually runs with). ls prints names
 // only — values are write-only everywhere, terminal included.
+// The app's page on the Piezas console: its Hosting card holds the
+// environment editor (write-only values), available before the first deploy.
+function appConsoleUrl(appId) {
+  return appId ? `${TARGET.console}/apps/${encodeURIComponent(appId)}` : TARGET.console;
+}
+
+// whereToSetLines — where the PERSON sets values themselves. Never through an
+// AI chat: a chat can be kept for a long time.
+function whereToSetLines(appId, names) {
+  return [
+    '  Set them yourself (values never go through an AI chat):',
+    `    on the app page: ${appConsoleUrl(appId)}  (Hosting -> Environment)`,
+    `    or in your own terminal: npx piezas env set ${names.map((k) => `${k}=...`).join(' ')}`,
+  ];
+}
+
+// --- Report a problem ------------------------------------------------------
+// Every app with a server carries a "Report a problem" button (contract v6).
+// Reports land in the app's own records (entity problem_reports, status new).
+// `piezas reports` lists the new ones; `--save` writes them into
+// .piezas/reports/ for the AI to fix together and marks them received, so the
+// next run shows only newer ones. It reads the app's own key the way the app
+// does locally (PIEZAS_API_KEY, else the project .env) and never prints it.
+export const REPORT_ENTITY_SLUG = 'problem_reports';
+
+function appApiBase(projectDir, env) {
+  const fromEnv = typeof env.PIEZAS_API_BASE === 'string' && env.PIEZAS_API_BASE.trim() ? env.PIEZAS_API_BASE.trim() : undefined;
+  const manifestBase = readManifestSafe(projectDir)?.apiBaseUrl;
+  return (fromEnv || (typeof manifestBase === 'string' && manifestBase) || TARGET_HOSTS[savedTarget(env)].api).replace(/\/+$/, '');
+}
+
+export async function reports(options = {}) {
+  const env = options.env ?? process.env;
+  const projectDir = options.cwd || process.cwd();
+  const fetchFn = options.fetchFn ?? fetch;
+  const result = (exitCode, status, extra = {}) => ({ exitCode, command: 'reports', status, ...extra });
+
+  if (isSandboxProject(projectDir)) {
+    log('  Practice mode has no real app, so there are no problem reports.\n');
+    return result(0, 'sandbox', { reports: [] });
+  }
+  const key = (typeof env.PIEZAS_API_KEY === 'string' && env.PIEZAS_API_KEY.trim()) || readEnvKeyValue(resolve(projectDir, '.env'));
+  if (!key) {
+    log('  This project has no app key yet, so reports cannot be read. Run `npx piezas init` first.\n');
+    return result(1, 'no-key');
+  }
+  const apiBase = appApiBase(projectDir, env);
+  const exchange = await fetchJson(fetchFn, `${adminBaseUrl(apiBase)}/v1/auth/token`, {
+    method: 'POST', body: { api_key: key }, timeoutMs: options.httpTimeoutMs,
+  });
+  const token = exchange.data?.access_token;
+  if (exchange.status !== 200 || !token) {
+    log(`  Could not sign in with this app's key (HTTP ${exchange.status}).\n`);
+    return result(1, `http-${exchange.status}`);
+  }
+  const entities = `${apiBase}/entities`;
+  const http = { token, timeoutMs: options.httpTimeoutMs };
+  const schemas = await fetchJson(fetchFn, `${entities}/v1/schemas`, http);
+  if (schemas.status !== 200) {
+    log(`  Could not read the app's records (HTTP ${schemas.status}).\n`);
+    return result(1, `http-${schemas.status}`);
+  }
+  const list = Array.isArray(schemas.data) ? schemas.data : (schemas.data?.data ?? []);
+  const schema = list.find((x) => x?.slug === REPORT_ENTITY_SLUG);
+  if (!schema) {
+    log('  No problem reports yet.\n');
+    return result(0, 'none', { reports: [] });
+  }
+  const qs = new URLSearchParams({ entity_type_id: schema.id, status: 'new', limit: '100' });
+  const records = await fetchJson(fetchFn, `${entities}/v1/records?${qs}`, http);
+  if (records.status !== 200) {
+    log(`  Could not read the problem reports (HTTP ${records.status}).\n`);
+    return result(1, `http-${records.status}`);
+  }
+  const found = (records.data?.data ?? []).map((r) => ({
+    id: r.id,
+    message: String(r.data?.message ?? r.title ?? ''),
+    page: r.data?.page ?? null,
+    browser: r.data?.browser ?? null,
+    viewport: r.data?.viewport || null,
+    context: (() => { try { return r.data?.context ? JSON.parse(r.data.context) : null; } catch { return null; } })(),
+    screenshotId: r.data?.screenshot_document_id || null,
+    reportedAt: r.data?.reported_at ?? r.createdAt ?? null,
+  }));
+  if (!found.length) {
+    log('  No new problem reports.\n');
+    return result(0, 'none', { reports: [] });
+  }
+
+  log(`  ${found.length} new problem report${found.length === 1 ? '' : 's'}:\n`);
+  for (const r of found) {
+    log(`  - ${r.message.length > 120 ? `${r.message.slice(0, 117)}...` : r.message}${r.screenshotId ? ' (with screenshot)' : ''}`);
+    if (r.page) log(`    on ${r.page}`);
+  }
+  log('');
+  if (!options.save) {
+    log('  Run `npx piezas reports --save` to collect them into .piezas/reports/ and mark them received.\n');
+    return result(0, 'listed', { reports: found });
+  }
+
+  const dir = resolve(projectDir, '.piezas', 'reports');
+  safeMkdir(dir);
+  const saved = [];
+  for (const r of found) {
+    const name = String(r.id).replace(/[^A-Za-z0-9_-]/g, '_');
+    // The screenshot first: it is what the AI should look at before anything.
+    let image = null;
+    if (r.screenshotId) image = await downloadReportScreenshot(fetchFn, `${apiBase}/documents`, http, r.screenshotId, join(dir, name));
+    const lines = [
+      `# Problem report ${r.id}`,
+      '',
+      `- Reported: ${r.reportedAt ?? 'unknown'}`,
+      `- Page: ${r.page ?? 'unknown'}`,
+      `- Window: ${r.viewport ?? 'unknown'}`,
+      `- Browser: ${r.browser ?? 'unknown'}`,
+      `- Screenshot: ${image ? basename(image) : r.screenshotId ? 'could not be downloaded' : 'none'}`,
+      '',
+      '## What they wrote',
+      '',
+      r.message,
+      '',
+    ];
+    const errors = r.context?.console ?? [];
+    const failed = r.context?.network ?? [];
+    if (errors.length) {
+      lines.push('## Errors and warnings on the page', '');
+      for (const e of errors) lines.push(`- ${e.level ?? 'error'}: ${String(e.message ?? '').slice(0, 300)}`);
+      lines.push('');
+    }
+    if (failed.length) {
+      lines.push('## Failed requests', '');
+      for (const f of failed) lines.push(`- ${f.method ?? 'GET'} ${f.url ?? '?'} -> ${f.status === 0 ? 'no response' : f.status}`);
+      lines.push('');
+    }
+    const file = join(dir, `${name}.md`);
+    writeFileSync(file, lines.join('\n'));
+    const mark = await fetchJson(fetchFn, `${entities}/v1/records/${encodeURIComponent(r.id)}`, { ...http, method: 'PUT', body: { status: 'received' } });
+    saved.push({ ...r, file: relative(projectDir, file), image: image ? relative(projectDir, image) : null, marked: mark.status === 200 });
+  }
+  log(`  Saved ${saved.length} report${saved.length === 1 ? '' : 's'} to .piezas/reports/.`);
+  const unmarked = saved.filter((r) => !r.marked).length;
+  if (unmarked) log(`  ${unmarked} could not be marked received and will show again next time.`);
+  log('');
+  return result(0, 'saved', { reports: saved });
+}
+
+// Downloads a report's screenshot from the app's Documents next to its .md.
+// Returns the file path, or null if it could not be fetched.
+async function downloadReportScreenshot(fetchFn, documentsBase, http, documentId, pathWithoutExtension) {
+  try {
+    const link = await fetchJson(fetchFn, `${documentsBase}/v1/documents/${encodeURIComponent(documentId)}/download-url`, http);
+    const url = link.data?.downloadUrl;
+    if (link.status !== 200 || !url) return null;
+    const response = await fetchFn(url);
+    if (!response.ok) return null;
+    const type = String(response.headers?.get?.('content-type') ?? '');
+    const extension = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
+    const file = `${pathWithoutExtension}.${extension}`;
+    writeFileSync(file, Buffer.from(await response.arrayBuffer()));
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+// `piezas report-button on|off`: a shortcut that saves the default answer for
+// the next deploy's question. The deploy itself sets the hosted switch.
+export function reportButton(options = {}) {
+  const projectDir = options.cwd || process.cwd();
+  const manifestPath = resolve(projectDir, 'piezas.manifest.json');
+  const state = options.state;
+  let manifest;
+  try { manifest = readJsonFile(manifestPath); } catch { manifest = null; }
+  if (!manifest) {
+    log('  No piezas.manifest.json here. Run `npx piezas init` first.\n');
+    return { exitCode: 1, command: 'report-button', status: 'no-manifest' };
+  }
+  if (state !== 'on' && state !== 'off') {
+    const current = manifest.reportButton === false ? 'off' : 'on';
+    log(`  The Report a problem button is ${current}. Change it with \`npx piezas report-button on\` or \`off\`.\n`);
+    return { exitCode: state === undefined ? 0 : 2, command: 'report-button', status: current };
+  }
+  if (state === 'off') manifest.reportButton = false;
+  else delete manifest.reportButton;
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  log(`  Saved: the Report a problem button defaults to ${state} at your next deploy (you are still asked each time).\n`);
+  return { exitCode: 0, command: 'report-button', status: state };
+}
+
 export async function envCmd(options = {}) {
   const env = options.env ?? process.env;
   const projectDir = options.cwd || process.cwd();
@@ -2687,6 +2941,32 @@ export async function envCmd(options = {}) {
   const idQS = appId ? `?appId=${encodeURIComponent(appId)}` : '';
 
   const action = options.action;
+  if (action === 'check') {
+    // Names only, never values: what the app declares it needs
+    // (deploy.requiredEnv in piezas.manifest.json, the same list deploy and
+    // the hosting server check) against what is set in the hosted environment.
+    let required = [];
+    try {
+      const man = readJsonFile(resolve(projectDir, 'piezas.manifest.json'));
+      if (Array.isArray(man?.deploy?.requiredEnv)) required = man.deploy.requiredEnv.filter((k) => typeof k === 'string' && k.trim());
+    } catch { /* no manifest -> nothing declared */ }
+    const res = await fetchJson(fetchFn, `${base}/v1/deployments/${slug}${idQS}`, httpOptions);
+    if (res.status !== 200 && res.status !== 404) {
+      log(`  Could not read the hosted environment (HTTP ${res.status}).\n`);
+      return { exitCode: 1, command: 'env', status: `http-${res.status}` };
+    }
+    const set = res.status === 200 ? (res.data.envKeys ?? []) : [];
+    const missing = required.filter((k) => !set.includes(k));
+    if (!missing.length) {
+      log(required.length ? `  All ${required.length} required settings are set.\n` : '  This app declares no required settings.\n');
+      return { exitCode: 0, command: 'env', status: 'ok', required, missing };
+    }
+    log(`  Missing settings: ${missing.join(', ')}`);
+    for (const line of whereToSetLines(appId, missing)) log(line);
+    log('');
+    return { exitCode: 1, command: 'env', status: 'missing', required, missing, consoleUrl: appConsoleUrl(appId) };
+  }
+
   if (action === 'ls' || action === undefined) {
     const res = await fetchJson(fetchFn, `${base}/v1/deployments/${slug}${idQS}`, httpOptions);
     if (res.status === 404) {
@@ -2754,7 +3034,7 @@ export async function envCmd(options = {}) {
     return { exitCode: 0, command: 'env', status: 'ok', keys: res.data.envKeys ?? [] };
   }
 
-  log(`  Unknown env action "${action}" — use ls, set KEY=VALUE, or rm KEY.\n`);
+  log(`  Unknown env action "${action}" — use ls, check, set KEY=VALUE, or rm KEY.\n`);
   return { exitCode: 2, command: 'env', status: 'usage' };
 }
 
@@ -4292,6 +4572,33 @@ export function findProjectRoot(startDir = process.cwd()) {
   }
 }
 
+// childProjects — Piezas projects in the folders just below dir (two levels),
+// for a session opened in the folder that CONTAINS the app.
+export function childProjects(dir, depth = 2) {
+  const found = [];
+  const walk = (d, left) => {
+    let entries;
+    try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.isSymbolicLink() || e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const child = join(d, e.name);
+      if (existsSync(join(child, STATE_DIR, STATE_FILE))) found.push(child);
+      else if (left > 1) walk(child, left - 1);
+    }
+  };
+  walk(resolve(dir), depth);
+  return found.sort();
+}
+
+// sessionRoot — the project a session works on: the one it is inside, or the
+// only one just below it.
+function sessionRoot(cwd) {
+  const inside = findProjectRoot(cwd);
+  if (inside) return { root: inside, below: false };
+  const below = childProjects(cwd);
+  return below.length === 1 ? { root: below[0], below: true } : { root: null, below: false, several: below };
+}
+
 function stateError(message) {
   const error = new Error(message);
   error.protocol = true;
@@ -5190,6 +5497,12 @@ export function phaseGuard(options = {}) {
   // session may have been opened in a parent folder of the app.
   const target = typeof options.file === 'string' && options.file ? resolve(cwd, options.file) : undefined;
   const root = (target && findProjectRoot(dirname(target))) || findProjectRoot(cwd);
+  // Deleting apps and passing secret values hold wherever the plugin runs,
+  // project or not: they act on the person's Piezas account, not on files.
+  if (options.tool === 'Bash' && typeof options.command === 'string') {
+    const outside = accountActionVerdict(stripHeredocBodies(options.command));
+    if (outside) return outside;
+  }
   // Not a protocol project: the guard has no jurisdiction here.
   if (!root) return guardAllow();
 
@@ -5269,7 +5582,10 @@ export function phaseGuard(options = {}) {
   if (state.phase === 'mock') {
     const content = guardContent(options);
     const isApiRoute = /(^|\/)app\/api\//.test(relPath);
-    const usesSdk = typeof content === 'string' && content.includes('@piezas/sdk');
+    // Declaring the dependency (package.json, lock files) is not calling it:
+    // the SDK stays installed through the mock so the build step need not re-add it.
+    const isManifest = /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?)$/.test(relPath);
+    const usesSdk = !isManifest && typeof content === 'string' && content.includes('@piezas/sdk');
     if (isApiRoute || usesSdk) {
       const what = isApiRoute ? `${relPath} is an API route` : `${relPath} imports @piezas/sdk`;
       return guardBlock(
@@ -5298,6 +5614,68 @@ const SCRIPTED_WRITE = /(^|[\s;|&(])(node|python3?|ruby|perl|deno|bun)\s+(-e|-c|
 const AGENT_APPROVE = /(?:\bpiezas(?:\.mjs)?|\bindex\.js)["']?\s+phase\s+approve\b/;
 // Same for an imported app's choices: the owner's reply records them.
 const AGENT_IMPORT_CHOOSE = /(?:\bpiezas(?:\.mjs)?|\bindex\.js)["']?\s+import\s+choose\b/;
+
+// Deleting an app is the owner's decision, made deliberately from their own
+// terminal. The hooks only see the AI's tool calls, so a person's own
+// `npx piezas undeploy` is unaffected.
+const PIEZAS_INVOCATION = String.raw`(?:\bpiezas(?:\.mjs)?|\bindex\.js)["']?\s+`;
+const AGENT_DELETE = new RegExp(`${PIEZAS_INVOCATION}(?:undeploy\\b|deploy\\b[^\\n;|&]*?(?:--delete\\b|\\sdelete(?=\\s|$)))`);
+const HTTP_DELETE = /(?:-X\s*|--request[\s=]+|--method[\s=]+|method\s*[:=]\s*['"`])DELETE\b/i;
+// Secret values must never pass through the AI: a chat transcript can be kept
+// for a long time. The AI names what is missing; the person sets the value.
+const AGENT_ENV_SET = new RegExp(`${PIEZAS_INVOCATION}env\\s+set\\b`);
+const AGENT_ENV_FLAG = new RegExp(`${PIEZAS_INVOCATION}(?:deploy|init)\\b[^\\n;|&]*?(?:--env[\\s=]+[A-Za-z_][A-Za-z0-9_]*=|--key[\\s=]+\\S)`);
+
+// Every deploy carries the owner's answer to "Keep the Report a problem
+// button on?". The AI must ask and pass --report-button; the status and logs
+// forms of deploy do not deploy, so they need no answer.
+const AGENT_DEPLOY = new RegExp(`${PIEZAS_INVOCATION}deploy\\b([^\\n;|&]*)`);
+const DEPLOY_READ_ONLY = /--status\b|--logs\b|(?:^|\s)(?:status|logs)(?=\s|$)/;
+const REPORT_BUTTON_BLOCK =
+  'Piezas: before every deploy, ask the owner one short question: "Keep the Report a problem button on? (yes/no)". ' +
+  'Then deploy with --report-button on or --report-button off, using only their answer. Never answer it for them, ' +
+  'and do not remove the button from the code: the deploy switches it.';
+
+const DELETE_BLOCK =
+  'Piezas: deleting or taking down an app is something only the owner can do, from their own terminal ' +
+  '(`npx piezas undeploy`, or the app page on the Piezas console). Do not do it, and do not offer to. ' +
+  'If they ask, tell them those two places in one sentence.';
+const ENV_SET_BLOCK =
+  'Piezas: setting values (keys, passwords, settings) is something the owner does themselves, never through this chat, ' +
+  'because a chat can be kept for a long time. Run `piezas env check` to list what is missing by NAME, then tell them ' +
+  'where to set each one: the app page on the Piezas console (Hosting -> Environment), or `npx piezas env set NAME=...` ' +
+  'in their own terminal. Never ask them to type a value here.';
+
+function accountActionVerdict(command) {
+  if (AGENT_DELETE.test(command)) return guardBlock(DELETE_BLOCK);
+  if (HTTP_DELETE.test(command) && /piezas/i.test(command)) return guardBlock(DELETE_BLOCK);
+  if (AGENT_ENV_SET.test(command) || AGENT_ENV_FLAG.test(command)) return guardBlock(ENV_SET_BLOCK);
+  const deployCall = AGENT_DEPLOY.exec(command);
+  if (deployCall && !DEPLOY_READ_ONLY.test(deployCall[1]) && !/--report-button[\s=]+(?:on|off)\b/.test(deployCall[1])) {
+    return guardBlock(REPORT_BUTTON_BLOCK);
+  }
+  return null;
+}
+
+// stripHeredocBodies — the command-level rules look at what the shell RUNS,
+// not at text being written into a file (a note that mentions
+// "npm install sqlite3" is not an install). File content is still checked
+// against the file rules through the write targets.
+export function stripHeredocBodies(command) {
+  const lines = String(command || '').split('\n');
+  const out = [];
+  let terminator = null;
+  for (const line of lines) {
+    if (terminator !== null) {
+      if (line.replace(/^\t+/, '') === terminator) terminator = null;
+      continue;
+    }
+    out.push(line);
+    const m = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/.exec(line);
+    if (m) terminator = m[2];
+  }
+  return out.join('\n');
+}
 
 const LOCAL_DB_INSTALL = new RegExp(
   `(^|[\\s;|&(])(?:npm|pnpm|yarn|bun)\\s+(?:install|i|add)\\b[^\\n;|&]*?\\s(${LOCAL_DB_PACKAGES.map(escapeForRegExp).join('|')})(?:@[^\\s]*)?(?=\\s|$)`,
@@ -5328,8 +5706,11 @@ export function shellWriteTargets(command) {
   return [...targets].filter((t) => t && t !== '/dev/null' && !t.startsWith('/dev/'));
 }
 
-function hardNoShellVerdict(command) {
-  if (!command) return null;
+function hardNoShellVerdict(fullCommand) {
+  if (!fullCommand) return null;
+  const command = stripHeredocBodies(fullCommand);
+  const account = accountActionVerdict(command);
+  if (account) return account;
   if (AGENT_APPROVE.test(command)) {
     return guardBlock(
       'Piezas: only the customer can approve the design. Do not run the approve command yourself. ' +
@@ -5547,15 +5928,25 @@ export function sandboxFetch(projectDir, inner = fetch) {
       const artifact = field('artifact');
       const artifactBytes = artifact && typeof artifact.size === 'number' ? artifact.size : 0;
       if (!artifactBytes) return reply(400, { error: 'empty artifact' });
-      // Simulates the hosting check's confirm mode, from the project's own files.
-      const RULE_OF = { PZ020: 'local-database', PZ021: 'key-in-browser', PZ001: 'key-in-browser', PZ002: 'key-in-browser' };
-      const findings = hardNoFindings(projectDir).map((f) => ({ rule: RULE_OF[f.code] ?? 'other', path: f.file ?? '', detail: f.code }));
+      // Simulates the hosting check's confirm mode the way the server does it:
+      // unpack the uploaded artifact and scan it.
+      const findings = await (async () => {
+        const unpack = mkdtempSync(join(tmpdir(), 'piezas-sandbox-artifact-'));
+        try {
+          const tgz = join(unpack, 'artifact.tar.gz');
+          writeFileSync(tgz, Buffer.from(await artifact.arrayBuffer()));
+          mkdirSync(join(unpack, 'app'));
+          execSync(`tar -xzf ${JSON.stringify(tgz)} -C ${JSON.stringify(join(unpack, 'app'))}`);
+          return scanArtifactHardNo(join(unpack, 'app'), String(field('kind') || 'server'));
+        } catch {
+          return [];
+        } finally {
+          rmSync(unpack, { recursive: true, force: true });
+        }
+      })();
       let riskAcknowledged = null;
       if (findings.length) {
-        const fp = createHash('sha256')
-          .update(findings.map((f) => `${f.rule}\u0000${f.path}`).sort().join('\n'))
-          .digest('hex')
-          .slice(0, 24);
+        const fp = hardNoFingerprint(findings);
         if (String(field('acknowledgeHardNo') || '') !== fp) {
           const what = findings
             .map((f) => (f.rule === 'local-database'
@@ -5713,6 +6104,107 @@ function confirmedDeployRisk(projectDir) {
   } catch {
     return null;
   }
+}
+
+// scanArtifactHardNo — mirrors the hosting server's scan (App Hosting Backend,
+// internal/appsd/hardno.go) on the staged artifact, in the same order, so both
+// sides find the same things and compute the same fingerprint.
+const ARTIFACT_LOCAL_DB_PACKAGES = [
+  'better-sqlite3', 'sqlite3', 'pg', 'mysql2', 'mongoose', 'knex', 'sequelize',
+  'typeorm', 'drizzle-orm', 'prisma', '@prisma/client',
+];
+const ARTIFACT_DB_EXTS = new Set(['.sqlite', '.sqlite3', '.db']);
+const ARTIFACT_SCAN_EXTS = new Set(['.js', '.mjs', '.cjs', '.html', '.json', '.py', '.txt', '.css']);
+const ARTIFACT_BROWSER_ROOTS = ['.next/static', 'public', 'static', 'dist/client', 'build/static'];
+const ARTIFACT_MAX_FILE = 4 << 20;
+const ARTIFACT_MAX_TOTAL = 64 << 20;
+
+// Lexical, depth-first, like Go's filepath.WalkDir. visit returns 'stop' to end.
+function walkLexical(dir, visit) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (e.name === 'node_modules') continue;
+      if (walkLexical(full, visit)) return true;
+    } else if (visit(full, e) === 'stop') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function browserLeak(text) {
+  if (/\bsk_(?:live|test)_[A-Za-z0-9]{12,}/.test(text)) return 'contains a Piezas secret key value';
+  if (/\b(?:NEXT_PUBLIC|VITE|PUBLIC)_[A-Z0-9_]*PIEZAS_API_KEY\b/.test(text)) return 'reads the Piezas API key through a public (browser) variable';
+  for (const m of text.matchAll(/\b(?:NEXT_PUBLIC|VITE|PUBLIC)_PIEZAS_[A-Z0-9_]*(?:KEY|SECRET|TOKEN)\b/g)) {
+    if (!m[0].includes('PUBLISHABLE')) return `exposes ${m[0]} to browsers`;
+  }
+  return '';
+}
+
+export function scanArtifactHardNo(root, kind) {
+  const out = [];
+  for (const pkg of ARTIFACT_LOCAL_DB_PACKAGES) {
+    const rel = `node_modules/${pkg}/package.json`;
+    if (existsSync(join(root, rel))) {
+      out.push({ rule: 'local-database', path: rel, detail: `bundles ${pkg}` });
+      break;
+    }
+  }
+  if (!out.length) {
+    walkLexical(root, (full) => {
+      if (ARTIFACT_DB_EXTS.has(extname(full).toLowerCase())) {
+        out.push({ rule: 'local-database', path: toPosix(relative(root, full)), detail: 'ships a database file' });
+        return 'stop';
+      }
+      return undefined;
+    });
+  }
+  const roots = kind === 'static' ? ['.'] : ARTIFACT_BROWSER_ROOTS;
+  let scanned = 0;
+  for (const r of roots) {
+    const base = join(root, r);
+    if (!existsSync(base)) continue;
+    let found = false;
+    walkLexical(base, (full) => {
+      if (!ARTIFACT_SCAN_EXTS.has(extname(full).toLowerCase())) return undefined;
+      let size;
+      try { size = statSync(full).size; } catch { return undefined; }
+      if (size > ARTIFACT_MAX_FILE) return undefined;
+      scanned += size;
+      if (scanned > ARTIFACT_MAX_TOTAL) { found = true; return 'stop'; }
+      let text;
+      try { text = readFileSync(full, 'latin1'); } catch { return undefined; }
+      const detail = browserLeak(text);
+      if (detail) {
+        out.push({ rule: 'key-in-browser', path: toPosix(relative(root, full)), detail });
+        found = true;
+        return 'stop';
+      }
+      return undefined;
+    });
+    if (found) break;
+  }
+  return out;
+}
+
+// hardNoFingerprint — identical to the server's: sha256 of the sorted
+// "rule\0path" lines, first 24 hex characters.
+export function hardNoFingerprint(findings) {
+  return createHash('sha256')
+    .update(findings.map((f) => `${f.rule}\u0000${f.path}`).sort().join('\n'))
+    .digest('hex')
+    .slice(0, 24);
+}
+
+function hardNoConfirmMessage(findings) {
+  const parts = findings.map((f) => (f.rule === 'local-database'
+    ? `the app keeps its own local database (${f.detail}), so those records are not in Piezas`
+    : `the Piezas key would be visible to everyone who opens the app (${f.path})`));
+  return `Paused before going live: ${parts.join('; ')}. Your AI tool can usually fix this. To deploy this version anyway, the app owner must confirm.`;
 }
 
 async function deployNeedsConfirmation(projectDir, options, data) {
@@ -6902,7 +7394,8 @@ export async function phaseHook(payload, options = {}) {
   if (!payload || typeof payload !== 'object') return done();
   const event = payload.hook_event_name;
   const cwd = typeof payload.cwd === 'string' && payload.cwd ? payload.cwd : process.cwd();
-  const root = findProjectRoot(cwd);
+  const session = sessionRoot(cwd);
+  const root = session.root;
   if (root && event) writeGuardMarker(root, payload);
 
   try {
@@ -6926,11 +7419,14 @@ export async function phaseHook(payload, options = {}) {
           `Wherever a Piezas message says \`npx piezas ...\`, run node "${options.cliPath}" ... instead.`
         : '';
       if (!root) {
+        const several = (session.several ?? []).map((d) => `${toPosix(relative(resolve(cwd), d))}/`);
         return done(
           0,
           hookContext(
             'SessionStart',
-            ['The Piezas plugin is installed. If the user wants to build a business app (bookings, CRM, intake, projects, a client portal), use the piezas skill to guide them.', signInLine, cliLine]
+            ['The Piezas plugin is installed. If the user wants to build a business app (bookings, CRM, intake, projects, a client portal), use the piezas skill to guide them.',
+              several.length ? `Piezas projects below this folder: ${several.join(', ')}. Ask which one they mean, then work inside it.` : '',
+              signInLine, cliLine]
               .filter(Boolean)
               .join('\n'),
           ),
@@ -6943,6 +7439,9 @@ export async function phaseHook(payload, options = {}) {
       const appUrl = manifest?.deploy?.url || (manifest?.appName ? `https://${slugifyAppName(manifest.appName)}.${new URL(DEFAULT_APPS_URL).host}` : '');
       const parts = [
         `[Piezas] This project is a Piezas app. ${STEP_NAMES[state.phase]}.`,
+        session.below
+          ? `The project is in the folder ${toPosix(relative(resolve(cwd), root))}/ below this session's folder: work there, and run every Piezas command from inside it.`
+          : '',
         PLAIN_LANGUAGE,
         sandbox
           ? `${SANDBOX_NOTE} Use the normal Piezas commands (init, deploy, env, status); they run against the simulator. ` +
@@ -6961,6 +7460,12 @@ export async function phaseHook(payload, options = {}) {
     }
 
     if (event === 'UserPromptSubmit') {
+      // A secret typed into the chat is stopped before the AI sees it: chat
+      // history can be kept for a long time. Runs in every folder.
+      const secret = secretInPrompt(payload.prompt);
+      if (secret) {
+        return done(0, JSON.stringify({ decision: 'block', reason: secretBlockReason(secret) }));
+      }
       if (!root) return done();
       let state = loadState(root);
       const notes = [];
@@ -7020,6 +7525,53 @@ export async function phaseHook(payload, options = {}) {
   return done();
 }
 
+// ===========================================================================
+// Secrets never go through the chat
+// ===========================================================================
+
+const SECRET_PATTERNS = [
+  { what: 'a Piezas secret key', re: /\bsk_(?:live|test)_[A-Za-z0-9]{12,}/ },
+  { what: 'a Piezas agent token', re: /\bagt_(?:live|test)_[A-Za-z0-9]{12,}/ },
+  { what: 'an Anthropic API key', re: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
+  { what: 'an OpenAI API key', re: /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}/ },
+  { what: 'a Stripe secret key', re: /\b(?:rk|sk)_(?:live|test)_[A-Za-z0-9]{16,}/ },
+  { what: 'an AWS access key', re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  { what: 'a GitHub token', re: /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})/ },
+  { what: 'a Slack token', re: /\bxox[abprs]-[A-Za-z0-9-]{10,}/ },
+  { what: 'a Google API key', re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+  { what: 'a private key', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+];
+// NAME=value (or NAME: value) where the name says it is secret and the value
+// looks like one: long, no spaces, letters and digits, not a placeholder.
+const SECRET_ASSIGNMENT = /\b((?:[A-Za-z][A-Za-z0-9_]*)?(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD))\s*[:=]\s*["']?([^\s"']{12,})/gi;
+
+function looksLikeSecretValue(name, value) {
+  if (/PUBLISHABLE|PUBLIC_KEY$/i.test(name)) return false;
+  if (/^pk_/.test(value)) return false;
+  if (/^(?:your|my|example|placeholder|changeme|xxx|<|\$\{?|process\.env)/i.test(value) || /\.\.\.|x{4,}|\*{4,}/i.test(value)) return false;
+  return /[A-Za-z]/.test(value) && /[0-9]/.test(value);
+}
+
+export function secretInPrompt(prompt) {
+  const text = String(prompt || '');
+  if (!text) return null;
+  for (const { what, re } of SECRET_PATTERNS) {
+    if (re.test(text)) return what;
+  }
+  for (const m of text.matchAll(SECRET_ASSIGNMENT)) {
+    if (looksLikeSecretValue(m[1], m[2])) return `a value for ${m[1]}`;
+  }
+  return null;
+}
+
+function secretBlockReason(what) {
+  return `Piezas stopped this message before your AI tool saw it: it looks like it contains ${what}. ` +
+    'Chats can be kept for a long time, so keys and passwords never go in them. Set it yourself instead: ' +
+    'on the app page in the Piezas console (Hosting -> Environment), or in your own terminal with ' +
+    '`npx piezas env set NAME=value`. Then send your message again without the value. ' +
+    'If it was a real key, consider replacing it, since it was typed here.';
+}
+
 function guardContent(options) {
   if (typeof options.content === 'string') return options.content;
   if (typeof options.contentFile === 'string' && options.contentFile && existsSync(options.contentFile)) {
@@ -7038,13 +7590,16 @@ function help() {
   console.log('    npx piezas init [dir]            Set up Piezas in a project');
   console.log('    npx piezas login                 Sign in via your browser (device code)');
   console.log('    npx piezas login --staging       Sign in to Piezas staging (later commands follow; --production switches back)');
+  console.log('    npx piezas reports [--save]      New Report a problem reports (--save: into .piezas/reports/, marked received)');
+  console.log('    npx piezas report-button on|off  Default answer for the next deploy\'s Report a problem question');
   console.log('    npx piezas logout                Remove the saved CLI session');
   console.log('    npx piezas whoami                Show which account the CLI is signed in as');
   console.log('    npx piezas deploy                Ship your built app to <app>.apps.piezas.ai');
   console.log('    npx piezas status                Deployment state + URL for this app');
   console.log('    npx piezas logs [n]              Last n log lines from the hosted app (default 200)');
   console.log('    npx piezas undeploy              Remove the hosting (the app + keys stay in the console)');
-  console.log('    npx piezas env ls|set|rm         Manage the app\'s HOSTED env (names only; values write-only)');
+  console.log('    npx piezas env ls|check|set|rm   Manage the app\'s HOSTED env (names only; values write-only)');
+  console.log('                                     check: which required settings are missing, and where to set them');
   console.log('                                     set refuses KEY= (empty value) unless --allow-empty');
   console.log('    npx piezas init --sandbox --app "Name"  Set up a project on a SIMULATED Piezas (no account needed)');
   console.log('    npx piezas connect               Connect a sandbox app to real Piezas (coming with sign-in)');
@@ -7089,6 +7644,7 @@ function help() {
   console.log('    --dir <path>                     Deploy a folder (server.js -> server app, index.html -> static)');
   console.log('    --cmd <command>                  Container start command (default: node server.js)');
   console.log('    --env KEY=VALUE                  Send one env var, typed explicitly (repeatable).');
+  console.log('    --report-button on|off           The owner\'s answer: keep the Report a problem button on? (asked every deploy)');
   console.log('                                     Deploy NEVER reads your local .env — the hosted');
   console.log('                                     environment lives in the console (Hosting card).');
   console.log('    --status / --logs [n] / --delete   Flag aliases of status / logs / undeploy');
@@ -7134,11 +7690,12 @@ const PREVIEW_FLAG_KEYS = new Set(['routes', 'url']);
 const SPEC_FLAG_KEYS = new Set(['json']);
 const TEST_FLAG_KEYS = new Set(['json']);
 const DEPLOY_FLAG_KEYS = new Set([
-  'app', 'appsUrl', 'cmd', 'delete', 'dir', 'env', 'isolated', 'logs', 'mixed', 'status',
+  'app', 'appsUrl', 'cmd', 'delete', 'dir', 'env', 'isolated', 'logs', 'mixed', 'reportButton', 'status',
 ]);
 const ENV_FLAG_KEYS = new Set(['app', 'appsUrl', 'allowEmpty']);
 const LOGIN_FLAG_KEYS = new Set(['apiBase', 'json', 'open', 'staging', 'production']);
 const SESSION_FLAG_KEYS = new Set(['json']);
+const REPORTS_FLAG_KEYS = new Set(['json', 'save']);
 
 function kebabCase(flagKey) {
   return flagKey.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
@@ -7351,6 +7908,7 @@ export async function main(argv = process.argv, currentDir = process.cwd()) {
         cmd: lastValue(flags.cmd),
         appsUrl: lastValue(flags.appsUrl),
         envPairs: flags.env,
+        reportButton: flags.reportButton === undefined ? undefined : String(lastValue(flags.reportButton)),
         isolated: Boolean(flags.isolated),
         interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
         status: Boolean(flags.status),
@@ -7362,6 +7920,27 @@ export async function main(argv = process.argv, currentDir = process.cwd()) {
       console.error(`  Error: ${error?.message || error}`);
       return 1;
     }
+  }
+
+  if (command === 'reports') {
+    const unknown = rejectUnknownFlags(flags, REPORTS_FLAG_KEYS, 'reports');
+    if (unknown !== undefined) return unknown;
+    try {
+      const result = await reports({ cwd: currentDir, save: Boolean(flags.save) });
+      if (flags.json) console.log(JSON.stringify(result, null, 2));
+      return result.exitCode;
+    } catch (error) {
+      console.error(`  Error: ${error?.message || error}`);
+      return 1;
+    }
+  }
+
+  if (command === 'report-button') {
+    const unknown = rejectUnknownFlags(flags, SESSION_FLAG_KEYS, 'report-button');
+    if (unknown !== undefined) return unknown;
+    const result = reportButton({ cwd: currentDir, state: positional[0] });
+    if (flags.json) console.log(JSON.stringify(result, null, 2));
+    return result.exitCode;
   }
 
   if (command === 'env') {
