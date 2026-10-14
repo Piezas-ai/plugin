@@ -136,6 +136,10 @@ before the AI sees them.
   files, so they cannot build. Building needs Claude Code (including the desktop
   app's Code tab) or Codex.
 
+## Privacy
+
+How Piezas handles your information: [Privacy Policy](https://piezas.ai/privacy).
+
 ## Support
 
 Questions or a check that looks wrong: support@piezas.ai.
