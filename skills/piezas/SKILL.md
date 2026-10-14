@@ -27,6 +27,10 @@ Your session context has a line starting `Piezas command`. It gives the exact
 `node "<path>/piezas.mjs"` command to run with the shell tool. Use it wherever
 these instructions say **piezas**. Never use `npx piezas`.
 
+If there is no such line, the Piezas checks are not running. Run
+`node --version`: if Node.js is missing, tell them in one sentence to install
+the LTS version from nodejs.org and restart, and build nothing until they have.
+
 ## Sign in first
 
 Everything real (creating the app, its settings, going live) needs their Piezas

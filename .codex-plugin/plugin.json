@@ -1,18 +1,28 @@
 {
   "name": "piezas",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "description": "Build business apps with Piezas from Codex: plain-language interview, clickable preview, and guardrails that keep the app on Piezas.",
-  "author": { "name": "Piezas.ai", "url": "https://piezas.ai" },
+  "author": {
+    "name": "Piezas.ai",
+    "url": "https://piezas.ai"
+  },
   "homepage": "https://piezas.ai",
   "license": "MIT",
-  "keywords": ["piezas", "business-apps", "no-code", "guardrails"],
+  "keywords": [
+    "piezas",
+    "business-apps",
+    "no-code",
+    "guardrails"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Piezas",
-    "shortDescription": "Build business apps on Piezas, guided step by step.",
+    "shortDescription": "Build business apps, guided",
     "longDescription": "Describe the app in plain language, see a clickable preview, and build it on Piezas business capabilities. Guardrails keep the app's data, keys and approvals where they belong.",
     "developerName": "Piezas.ai",
     "category": "Productivity",
-    "defaultPrompt": ["I want to build an app for my business"]
+    "defaultPrompt": [
+      "I want to build an app for my business"
+    ]
   }
 }

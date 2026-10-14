@@ -40,8 +40,8 @@ also works. Already have an app (for example from Lovable)? Say so, or use
 `/piezas:import`: Piezas copies it into a new folder and never changes the
 original.
 
-Requirements: **Node.js** (LTS). If it is missing, the plugin says so in one
-sentence and turns its checks off rather than failing.
+Requirements: **Node.js** (LTS). The plugin's checks run with Node.js; if it is
+missing, the AI tells you in one sentence how to install it before building.
 
 ## What the user sees, and what they never see
 
@@ -91,10 +91,41 @@ skills/piezas/SKILL.md                          front door: the four steps, plai
 skills/piezas-pm/SKILL.md                       the requirements interview
 skills/piezas-spec/SKILL.md                     spec mode (runs the spec command init installed)
 commands/*.md                                   Claude Code slash commands (Codex uses the skills)
-hooks/hooks.json, hooks/run.sh                  one launcher for both hosts
-vendor/piezas.mjs                               the Piezas CLI, bundled
+hooks/hooks.json, hooks/hook.mjs                one hook entry for both hosts
+vendor/piezas.mjs, vendor/*.js                  the Piezas CLI, bundled (its source modules)
 rules/*.md                                      the Piezas rules, by topic
 ```
+
+## What the plugin runs, sends and stores
+
+**Runs on your computer.** The hooks run `hooks/hook.mjs` with Node.js. It
+passes each event to the bundled Piezas checks (`vendor/hooks.js`) and only
+ever refuses a tool call or adds context; it never approves one. `vendor/` is
+the readable source of the open `piezas` command-line tool (its modules, plus
+the `vendor/piezas.mjs` entry), copied in so nothing is downloaded at run time. The checks on each change run entirely on your
+computer; your code is not sent anywhere for them.
+
+**Talks to these Piezas addresses, and nothing else of its own:**
+
+| Address | When | What is sent |
+| --- | --- | --- |
+| `app.piezas.ai`, `api.piezas.ai` | Sign-in, creating the app, checking settings | Your sign-in code, the app's name, and the names (never the values) of settings |
+| `apps.piezas.ai` | Only when you deploy | The built app. `.env` files are never included. |
+| `mcp.piezas.ai` | When a project is set up | Nothing; it downloads the current Piezas rules |
+| `registry.npmjs.org` | Before a deploy | Nothing; it checks the latest Piezas SDK version |
+| The `staging.piezas.ai` equivalents | Only after `piezas login --staging` | The same as above |
+
+Problem reports from an app's Report a problem button go to that app's own
+records on Piezas, sent by the app itself, not by this plugin.
+
+**Stores on your computer:** your sign-in at `~/.piezas/credentials.json`
+(readable only by you), the staging choice at `~/.piezas/target.json` if you
+made one, and the project's own progress in its `.piezas/` folder.
+
+**Keys:** the only key it uses is your app's Piezas key (`PIEZAS_API_KEY`),
+read from the project's `.env` or your environment, and it is sent only to
+Piezas. No analytics or tracking. Secrets you paste into the chat are stopped
+before the AI sees them.
 
 ## Honest limits
 
@@ -104,9 +135,6 @@ rules/*.md                                      the Piezas rules, by topic
 - **Plain chat can't build.** Claude.ai web chat and ChatGPT chat cannot write
   files, so they cannot build. Building needs Claude Code (including the desktop
   app's Code tab) or Codex.
-- **A project in a subfolder** of the session folder is guarded on writes, but
-  it misses the session-start context. The skill tells the agent to use the
-  session folder.
 
 ## Support
 
