@@ -5,9 +5,9 @@
 // (phaseHook in ../vendor/hooks.js) and prints the answer.
 //
 // What it can answer, and nothing else:
-//   - PreToolUse: either nothing (the host's normal permission flow decides), or
-//     a refusal: { hookSpecificOutput: { permissionDecision: "deny", ... } }.
-//     It never approves a tool call; any other decision is dropped below.
+//   - PreToolUse is NOT handled here: it runs hooks/pre-tool-use.mjs, which
+//     never writes to stdout. If it is sent here anyway, any permission
+//     decision is dropped below, so this file can never approve a tool call.
 //   - SessionStart / UserPromptSubmit: plain-language context for the AI, or a
 //     refusal of a message that contains a secret ({ decision: "block" }).
 //   - Stop: at most one hold for a broken never-rule ({ decision: "block" }).
@@ -37,7 +37,7 @@ if (stdout) {
   try {
     const answer = JSON.parse(stdout);
     const decision = answer?.hookSpecificOutput?.permissionDecision;
-    if (decision !== undefined && decision !== 'deny') {
+    if (decision !== undefined) {
       delete answer.hookSpecificOutput.permissionDecision;
       delete answer.hookSpecificOutput.permissionDecisionReason;
       stdout = JSON.stringify(answer);
