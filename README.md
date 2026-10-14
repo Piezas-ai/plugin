@@ -98,9 +98,11 @@ rules/*.md                                      the Piezas rules, by topic
 
 ## What the plugin runs, sends and stores
 
-**Runs on your computer.** The hooks run `hooks/hook.mjs` with Node.js. It
-passes each event to the bundled Piezas checks (`vendor/hooks.js`) and only
-ever refuses a tool call or adds context; it never approves one. `vendor/` is
+**Runs on your computer.** The hooks run with Node.js. Before each tool call,
+`hooks/pre-tool-use.mjs` runs the Piezas checks; it never writes an answer, so
+it can only refuse (exit code 2, with the reason) or stay silent and leave the
+decision to the normal permission prompt. It never approves a tool call. The
+other events run `hooks/hook.mjs`, which only adds context for the AI. `vendor/` is
 the readable source of the open `piezas` command-line tool (its modules, plus
 the `vendor/piezas.mjs` entry), copied in so nothing is downloaded at run time. The checks on each change run entirely on your
 computer; your code is not sent anywhere for them.
@@ -109,10 +111,11 @@ computer; your code is not sent anywhere for them.
 
 | Address | When | What is sent |
 | --- | --- | --- |
-| `app.piezas.ai`, `api.piezas.ai` | Sign-in, creating the app, checking settings | Your sign-in code, the app's name, and the names (never the values) of settings |
+| `app.piezas.ai`, `api.piezas.ai` | Sign-in, creating the app, checking settings, reading problem reports | Your sign-in code, the app's name, and the names (never the values) of settings |
 | `apps.piezas.ai` | Only when you deploy | The built app. `.env` files are never included. |
 | `mcp.piezas.ai` | When a project is set up | Nothing; it downloads the current Piezas rules |
 | `registry.npmjs.org` | Before a deploy | Nothing; it checks the latest Piezas SDK version |
+| `*.amazonaws.com` | When you save problem reports | Nothing; it downloads a report's screenshot through a temporary link from Piezas |
 | The `staging.piezas.ai` equivalents | Only after `piezas login --staging` | The same as above |
 
 Problem reports from an app's Report a problem button go to that app's own
@@ -126,6 +129,21 @@ made one, and the project's own progress in its `.piezas/` folder.
 read from the project's `.env` or your environment, and it is sent only to
 Piezas. No analytics or tracking. Secrets you paste into the chat are stopped
 before the AI sees them.
+
+## Security
+
+- **Your credentials go only to Piezas.** The plugin uses two credentials,
+  both issued by Piezas: your sign-in (`~/.piezas/credentials.json`) and your
+  app's key (`PIEZAS_API_KEY` in the project's `.env`). They are sent only to
+  Piezas, to act on your account and your app.
+- **One gate for every request.** All network requests go through
+  `vendor/net.js`, which allows only `https` addresses on `piezas.ai`. The two
+  downloads in the table above that leave `piezas.ai` carry no credential.
+  Nothing, including a setting or environment variable, can widen that list.
+- **Checks can only refuse.** As described above, the check before each tool
+  call can refuse it or stay silent; it can never approve.
+- **Readable code.** Everything in `vendor/` and `hooks/` is unminified source
+  under the MIT license.
 
 ## Honest limits
 
