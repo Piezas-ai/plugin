@@ -1348,7 +1348,8 @@ export function phaseApprove(startDir = process.cwd(), options = {}) {
     };
   }
 
-  const approval = { gate, by: 'user', at: new Date().toISOString() };
+  const ownerReply = typeof options.ownerReply === 'string' ? options.ownerReply.trim() : '';
+  const approval = { gate, by: 'user', at: new Date().toISOString(), ...(ownerReply ? { via: 'relayed', ownerReply } : {}) };
   const saved = saveState(root, { ...state, approvals: [...state.approvals, approval] });
   return {
     exitCode: 0,

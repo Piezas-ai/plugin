@@ -168,6 +168,7 @@ export async function main(argv = process.argv, currentDir = process.cwd()) {
       take: flags.take,
       keep: flags.keep,
       customerData: flags.customerData === undefined ? undefined : lastValue(flags.customerData),
+      ownerReply: flags.ownerReply === undefined ? undefined : lastValue(flags.ownerReply),
     });
     if (flags.json) console.log(JSON.stringify(result.json, null, 2));
     else for (const line of result.output) console.log(line);
@@ -398,7 +399,8 @@ export async function main(argv = process.argv, currentDir = process.cwd()) {
       } else if (subcommand === 'approve') {
         const gate = lastValue(flags.gate);
         if (typeof gate !== 'string') return usageError('phase approve requires --gate <name> (v1: mock)');
-        result = phaseApprove(currentDir, { gate });
+        const ownerReply = flags.ownerReply === undefined ? undefined : lastValue(flags.ownerReply);
+        result = phaseApprove(currentDir, { gate, ownerReply });
       } else if (subcommand === 'advance') {
         result = phaseAdvance(currentDir);
       } else if (subcommand === 'hook') {

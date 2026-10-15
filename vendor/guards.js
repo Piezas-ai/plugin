@@ -979,7 +979,13 @@ export function writeGuardMarker(root, payload) {
 // guardWarning — a plain sentence when this project's guardrails have not run
 // recently (hooks off, plugin missing, Node missing), else null. Commands an
 // agent runs go through PreToolUse first, so a live session is always fresh.
+// The plugin-directory edition ships without hooks by design (OpenAI's
+// directory does not accept them), so "turn the checks back on" would point at
+// hooks that don't exist. Its build drops this marker next to the engine.
+const DIRECTORY_EDITION = existsSync(join(dirname(fileURLToPath(import.meta.url)), 'edition-directory.json'));
+
 export function guardWarning(startDir = process.cwd()) {
+  if (DIRECTORY_EDITION) return null;
   const root = findProjectRoot(startDir);
   if (!root) return null;
   try {
@@ -1564,9 +1570,15 @@ export function importCommand(sub, startDir = process.cwd(), options = {}) {
 
   if (sub === 'choose') {
     // Inside an AI tool the owner answers in the chat and the hook records it;
-    // the AI never records a choice. This command is for a person at a terminal.
-    if (agentHost(options.env ?? process.env)) {
+    // the AI never records a choice on its own. Where no hooks run (the plugin
+    // directory build), the AI may relay the owner's exact words with
+    // --owner-reply; the record keeps the quote and says it was relayed.
+    const ownerReply = typeof options.ownerReply === 'string' ? options.ownerReply.trim() : '';
+    if (agentHost(options.env ?? process.env) && !ownerReply) {
       return fail('The owner\'s choices are recorded from their own replies. Run `piezas import ask <item>`, ask the question it prints, and wait for their answer.');
+    }
+    if (ownerReply && HANDS_BACK.test(ownerReply.toLowerCase())) {
+      return fail('"' + ownerReply + '" is not a choice. Give your recommendation in one sentence and ask the owner again.');
     }
     const ids = new Set((current.canTakeOver || []).map((i) => i.id));
     const list = (value) => (Array.isArray(value) ? value : value === undefined || value === true ? [] : [value])
@@ -1593,6 +1605,7 @@ export function importCommand(sub, startDir = process.cwd(), options = {}) {
       customerData,
       dataMigration: customerData === 'yes' ? 'later' : null,
       decidedAt: new Date().toISOString(),
+      ...(ownerReply ? { decidedVia: 'relayed', ownerReply } : {}),
     };
     writeImportState(root, data);
     return { exitCode: 0, json: { command: 'import choose', ok: true, ...data }, output: ['recorded.', ...importPlanLines(data)] };

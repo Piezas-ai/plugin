@@ -463,8 +463,8 @@ export const INIT_FLAG_KEYS = new Set([
   'yes',
 ]);
 export const DOCTOR_FLAG_KEYS = new Set(['json', 'strict']);
-export const IMPORT_FLAG_KEYS = new Set(['customerData', 'json', 'keep', 'take']);
-export const PHASE_FLAG_KEYS = new Set(['cli', 'command', 'contentFile', 'context', 'file', 'gate', 'json', 'rulesDir', 'tool']);
+export const IMPORT_FLAG_KEYS = new Set(['customerData', 'json', 'keep', 'ownerReply', 'take']);
+export const PHASE_FLAG_KEYS = new Set(['cli', 'command', 'contentFile', 'context', 'file', 'gate', 'json', 'ownerReply', 'rulesDir', 'tool']);
 export const CONNECT_FLAG_KEYS = new Set(['json']);
 export const PREVIEW_FLAG_KEYS = new Set(['routes', 'url']);
 export const SPEC_FLAG_KEYS = new Set(['json']);
