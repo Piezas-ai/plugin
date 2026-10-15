@@ -69,6 +69,8 @@ import {
   deploy,
   envCmd,
   login,
+  loginStart,
+  loginWait,
   logout,
   openInBrowser,
   reportButton,
@@ -180,6 +182,16 @@ export async function main(argv = process.argv, currentDir = process.cwd()) {
     }
     try {
       if (flags.staging && flags.production) return usageError('choose one of --staging or --production');
+      if (flags.start && flags.wait) return usageError('choose one of --start or --wait');
+      const target = flags.staging ? 'staging' : flags.production ? 'production' : undefined;
+      // Two-step sign-in for AI tools: --start prints the link and exits,
+      // --wait waits for the approval.
+      if (flags.start) {
+        return (await loginStart({ apiBase: lastValue(flags.apiBase), target, json: Boolean(flags.json) })).exitCode;
+      }
+      if (flags.wait) {
+        return (await loginWait({ json: Boolean(flags.json) })).exitCode;
+      }
       const result = await login({
         apiBase: lastValue(flags.apiBase),
         target: flags.staging ? 'staging' : flags.production ? 'production' : undefined,

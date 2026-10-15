@@ -38,6 +38,7 @@ import {
   DEFAULT_API_BASE_URL,
   TARGET,
   TARGET_HOSTS,
+  piezasHomeDir,
   savedTarget,
 } from './constants.js';
 import {
@@ -318,43 +319,117 @@ export async function login(options = {}) {
   return { exitCode: outcome.exitCode, ...outcome.summary };
 }
 
-export async function runLogin(options) {
+// beginSignIn asks Piezas for a device code (the OAuth device grant, falling
+// back to the older device-code route on a server without it). Returns
+// { ok: true, flowKind, flow, device, confirmUrl, apiBase } or
+// { ok: false, outcome } with the plain-language failure already logged.
+export async function beginSignIn(options) {
   const env = options.env ?? process.env;
   const fetchFn = options.fetchFn ?? fetch;
   // --staging / --production choose which Piezas to sign in to, and the choice
   // is saved with the sign-in so every later command follows it.
-  const hosts = options.target ? TARGET_HOSTS[options.target] : TARGET;
+  const hosts = options.target ? TARGET_HOSTS[options.target] : TARGET_HOSTS[savedTarget(env)] ?? TARGET;
   const apiBase = resolveApiBase(options, env, hosts.api);
   const admin = adminBaseUrl(apiBase);
 
-  log(`\n  🧱 Piezas login${options.target === 'staging' ? ' (staging)' : ''}\n`);
-
+  let flowKind = 'oauth';
   let flow = oauthDeviceFlow(fetchFn, admin, options.httpTimeoutMs);
   let start;
   try {
     start = await flow.start();
     // Only a missing route falls back; any other refusal is reported as is.
     if (start.status === 404) {
+      flowKind = 'legacy';
       flow = legacyDeviceFlow(fetchFn, admin, options.httpTimeoutMs);
       start = await flow.start();
     }
   } catch (error) {
     log(`  Could not reach ${apiBase} (${error?.message || 'network error'}). Check your connection and try again.`);
-    return { exitCode: 1, summary: { command: 'login', status: 'error', error: 'unreachable', apiBase } };
+    return { ok: false, outcome: { exitCode: 1, summary: { command: 'login', status: 'error', error: 'unreachable', apiBase } } };
   }
 
   if (start.status === 429) {
     log('  Too many sign-in requests are pending right now - wait a few minutes and try again.');
-    return { exitCode: 1, summary: { command: 'login', status: 'error', error: 'rate-limited', apiBase } };
+    return { ok: false, outcome: { exitCode: 1, summary: { command: 'login', status: 'error', error: 'rate-limited', apiBase } } };
   }
   const { device } = start;
   if (!device || typeof device.deviceCode !== 'string' || typeof device.userCode !== 'string') {
     log(`  Sign-in could not be started (HTTP ${start.status}). Try again in a moment.`);
-    return { exitCode: 1, summary: { command: 'login', status: 'error', error: `http-${start.status}`, apiBase } };
+    return { ok: false, outcome: { exitCode: 1, summary: { command: 'login', status: 'error', error: `http-${start.status}`, apiBase } } };
   }
 
   const verificationUri = device.verificationUri || `${hosts.console}/device`;
   const confirmUrl = `${verificationUri}${verificationUri.includes('?') ? '&' : '?'}code=${encodeURIComponent(device.userCode)}`;
+  return { ok: true, flowKind, flow, device, confirmUrl, apiBase };
+}
+
+// pollSignIn polls until the code is approved, expires or is refused, then
+// saves the sign-in (and the --staging/--production choice). deadline is a
+// timestamp in milliseconds.
+export async function pollSignIn({ flow, device, apiBase, target, deadline, codeExpiresAt }, options) {
+  const env = options.env ?? process.env;
+  let intervalMs = options.pollIntervalMs
+    ?? (Number(device.interval) > 0 ? Number(device.interval) : 5) * 1000;
+  const slowDownMs = options.slowDownMs ?? SLOW_DOWN_STEP_MS;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, intervalMs));
+    let poll;
+    try {
+      poll = await flow.poll(device.deviceCode);
+    } catch {
+      continue; // transient network trouble — keep polling until expiry
+    }
+
+    if (poll.state === 'ok') {
+      const credentials = { ...poll.credentials, apiBase };
+      const credentialsPath = writeCredentials(credentials, env);
+      if (target) saveTarget(target, env);
+      log('');
+      log(`  Logged in as ${credentials.email}${credentials.tenantName ? ` (${credentials.tenantName})` : ''}.`);
+      log(`  Session saved to ${credentialsPath}`);
+      log('  Next: run `npx piezas init` in your project folder.\n');
+      return {
+        exitCode: 0,
+        summary: {
+          command: 'login',
+          status: 'ok',
+          tenantId: credentials.tenantId ?? null,
+          tenantName: credentials.tenantName ?? null,
+          email: credentials.email ?? null,
+          apiBase,
+          credentialsPath,
+        },
+      };
+    }
+    if (poll.state === 'failed') {
+      log(`  Sign-in failed (HTTP ${poll.status}). ${LOGIN_RETRY_HINT}`);
+      return { exitCode: 1, summary: { command: 'login', status: 'error', error: `http-${poll.status}`, apiBase } };
+    }
+    if (poll.state === 'slow_down') {
+      intervalMs += slowDownMs;
+      continue;
+    }
+    if (poll.state === 'gone') {
+      log(`  This sign-in code is no longer valid (expired or already used). ${LOGIN_RETRY_HINT}`);
+      return { exitCode: 1, summary: { command: 'login', status: 'expired', apiBase } };
+    }
+    // Pending, including a transient 429/5xx — keep polling until expiry.
+  }
+
+  if (codeExpiresAt !== undefined && Date.now() < codeExpiresAt) {
+    log('  Not approved yet. The code is still valid: run `piezas login --wait` again.');
+    return { exitCode: 1, summary: { command: 'login', status: 'waiting', apiBase } };
+  }
+  log(`  The sign-in code expired before it was approved. ${LOGIN_RETRY_HINT}`);
+  return { exitCode: 1, summary: { command: 'login', status: 'expired', apiBase } };
+}
+
+export async function runLogin(options) {
+  log(`\n  🧱 Piezas login${options.target === 'staging' ? ' (staging)' : ''}\n`);
+  const begun = await beginSignIn(options);
+  if (!begun.ok) return begun.outcome;
+  const { flow, device, confirmUrl, apiBase } = begun;
 
   log('  Confirm this code in your browser to sign in:');
   log('');
@@ -387,63 +462,120 @@ export async function runLogin(options) {
     : () => {};
   log('  Waiting for approval...');
 
-  let intervalMs = options.pollIntervalMs
-    ?? (Number(device.interval) > 0 ? Number(device.interval) : 5) * 1000;
-  const slowDownMs = options.slowDownMs ?? SLOW_DOWN_STEP_MS;
   const lifetimeMs = (Number(device.expiresIn) > 0 ? Number(device.expiresIn) : 900) * 1000;
-  const deadline = Date.now() + lifetimeMs;
-
   try {
-    while (Date.now() < deadline) {
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, intervalMs));
-      let poll;
-      try {
-        poll = await flow.poll(device.deviceCode);
-      } catch {
-        continue; // transient network trouble — keep polling until expiry
-      }
-
-      if (poll.state === 'ok') {
-        const credentials = { ...poll.credentials, apiBase };
-        const credentialsPath = writeCredentials(credentials, env);
-        if (options.target) saveTarget(options.target, env);
-        log('');
-        log(`  Logged in as ${credentials.email}${credentials.tenantName ? ` (${credentials.tenantName})` : ''}.`);
-        log(`  Session saved to ${credentialsPath}`);
-        log('  Next: run `npx piezas init` in your project folder.\n');
-        return {
-          exitCode: 0,
-          summary: {
-            command: 'login',
-            status: 'ok',
-            tenantId: credentials.tenantId ?? null,
-            tenantName: credentials.tenantName ?? null,
-            email: credentials.email ?? null,
-            apiBase,
-            credentialsPath,
-          },
-        };
-      }
-      if (poll.state === 'failed') {
-        log(`  Sign-in failed (HTTP ${poll.status}). ${LOGIN_RETRY_HINT}`);
-        return { exitCode: 1, summary: { command: 'login', status: 'error', error: `http-${poll.status}`, apiBase } };
-      }
-      if (poll.state === 'slow_down') {
-        intervalMs += slowDownMs;
-        continue;
-      }
-      if (poll.state === 'gone') {
-        log(`  This sign-in code is no longer valid (expired or already used). ${LOGIN_RETRY_HINT}`);
-        return { exitCode: 1, summary: { command: 'login', status: 'expired', apiBase } };
-      }
-      // Pending, including a transient 429/5xx — keep polling until expiry.
-    }
-
-    log(`  The sign-in code expired before it was approved. ${LOGIN_RETRY_HINT}`);
-    return { exitCode: 1, summary: { command: 'login', status: 'expired', apiBase } };
+    return await pollSignIn({ flow, device, apiBase, target: options.target, deadline: Date.now() + lifetimeMs }, options);
   } finally {
     cancelOffer();
   }
+}
+
+// --- Two-step sign-in, for AI tools -------------------------------------------
+// An AI tool can only pass on a command's output once the command ends, and a
+// sandbox may not be able to open a browser. So `login --start` prints the
+// approval link and exits at once (the tool shows it as a clickable link), and
+// `login --wait` then waits for the approval. The pending code is saved, owner
+// readable only, between the two.
+
+// The longest `login --wait` waits in one run.
+export const LOGIN_WAIT_MAX_MS = 10 * 60 * 1000;
+
+export function pendingLoginPath(env = process.env) {
+  return join(piezasHomeDir(env), 'pending-login.json');
+}
+
+function readPendingLogin(env) {
+  try {
+    const parsed = JSON.parse(readFileSync(pendingLoginPath(env), 'utf-8'));
+    return parsed && typeof parsed.deviceCode === 'string' ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function clearPendingLogin(env) {
+  try { unlinkSync(pendingLoginPath(env)); } catch { /* already gone */ }
+}
+
+export async function loginStart(options = {}) {
+  const env = options.env ?? process.env;
+  const begun = await beginSignIn(options);
+  if (!begun.ok) {
+    if (options.json) console.log(JSON.stringify(begun.outcome.summary, null, 2));
+    return { exitCode: begun.outcome.exitCode, ...begun.outcome.summary };
+  }
+  const { flowKind, device, confirmUrl, apiBase } = begun;
+  const expiresIn = Number(device.expiresIn) > 0 ? Number(device.expiresIn) : 900;
+  const file = pendingLoginPath(env);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, `${JSON.stringify({
+    deviceCode: device.deviceCode,
+    userCode: device.userCode,
+    interval: Number(device.interval) > 0 ? Number(device.interval) : 5,
+    expiresAt: Date.now() + expiresIn * 1000,
+    flowKind,
+    apiBase,
+    target: options.target ?? null,
+    url: confirmUrl,
+  }, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(file, 0o600);
+
+  const opener = options.openBrowserFn ?? openInBrowser;
+  if (options.open !== false) opener(confirmUrl);
+
+  const summary = { command: 'login', status: 'started', url: confirmUrl, code: device.userCode, expiresIn, apiBase };
+  if (options.json) {
+    console.log(JSON.stringify(summary, null, 2));
+  } else {
+    console.log(`  Open this link to sign in to Piezas: ${confirmUrl}  (code ${device.userCode})`);
+    console.log('  Then run `piezas login --wait`.');
+  }
+  return { exitCode: 0, ...summary };
+}
+
+export async function loginWait(options = {}) {
+  const env = options.env ?? process.env;
+  const pending = readPendingLogin(env);
+  const fail = (status, message) => {
+    log(`  ${message}`);
+    const summary = { command: 'login', status };
+    if (options.json) console.log(JSON.stringify(summary, null, 2));
+    return { exitCode: 1, ...summary };
+  };
+  if (!pending) return fail('no-pending', 'No sign-in is waiting. Run `piezas login --start` first.');
+  if (Date.now() >= pending.expiresAt) {
+    clearPendingLogin(env);
+    return fail('expired', 'That sign-in code has expired. Run `piezas login --start` for a new one.');
+  }
+
+  const fetchFn = options.fetchFn ?? fetch;
+  const admin = adminBaseUrl(pending.apiBase);
+  const flow = pending.flowKind === 'legacy'
+    ? legacyDeviceFlow(fetchFn, admin, options.httpTimeoutMs)
+    : oauthDeviceFlow(fetchFn, admin, options.httpTimeoutMs);
+  log(`  Waiting for you to approve code ${pending.userCode}...`);
+  const maxWaitMs = options.maxWaitMs ?? LOGIN_WAIT_MAX_MS;
+  const deadline = Math.min(pending.expiresAt, Date.now() + maxWaitMs);
+
+  const previousEmit = io.emit;
+  if (options.json) io.emit = (message) => process.stderr.write(`${message}\n`);
+  let outcome;
+  try {
+    outcome = await pollSignIn({
+      flow,
+      device: { deviceCode: pending.deviceCode, interval: pending.interval },
+      apiBase: pending.apiBase,
+      target: pending.target ?? undefined,
+      deadline,
+      codeExpiresAt: pending.expiresAt,
+    }, options);
+  } finally {
+    io.emit = previousEmit;
+  }
+  // Keep the code only while it can still be approved; a later --wait resumes it.
+  if (outcome.summary.status !== 'waiting') clearPendingLogin(env);
+  if (options.json) console.log(JSON.stringify(outcome.summary, null, 2));
+  return { exitCode: outcome.exitCode, ...outcome.summary };
 }
 
 // How long logout waits for the server-side session revocation before giving
@@ -506,6 +638,32 @@ export function signInStatus(env = process.env) {
   };
 }
 
+// signInMismatch: the saved sign-in is for one Piezas (production or staging)
+// while this computer is set to use the other. Commands must not quietly use
+// the other environment, so they stop and ask for a fresh sign-in. Only the
+// two real environments count; other hosts (development, tests) never match.
+export function signInMismatch(env = process.env, options = {}) {
+  const credentials = readCredentials(env);
+  if (!credentials || typeof credentials.apiBase !== 'string') return null;
+  const known = Object.values(TARGET_HOSTS).map((h) => h.api);
+  const saved = credentials.apiBase.replace(/\/+$/, '');
+  if (!known.includes(saved)) return null;
+  const target = savedTarget(env);
+  const active = resolveApiBase(options, env, TARGET_HOSTS[target].api);
+  if (!known.includes(active) || active === saved) return null;
+  return { signedInTo: saved, active, loginFlag: target === 'staging' ? ' --staging' : ' --production' };
+}
+
+// signInNeededLine: the one plain line commands print when they need an account.
+export function signInNeededLine(env = process.env, options = {}) {
+  const mismatch = signInMismatch(env, options);
+  if (mismatch) {
+    return `You're signed in to ${mismatch.signedInTo}, but this computer is set to use ${mismatch.active}. ` +
+      `Sign in again for that Piezas: run \`npx piezas login${mismatch.loginFlag}\`, then retry.`;
+  }
+  return 'You need to sign in first: run `npx piezas login`, then retry.';
+}
+
 export function whoami(options = {}) {
   const env = options.env ?? process.env;
   const credentials = readCredentials(env);
@@ -560,7 +718,10 @@ export async function resolveKeyViaLogin(projectDir, options) {
   if (!options.fromLogin && !(options.interactive && !options.yes)) return undefined;
   const env = options.env ?? process.env;
   const credentials = platformCredentials(projectDir, env);
-  if (!credentials) return undefined;
+  if (!credentials) {
+    if (signInMismatch(env, options)) log(`  ${signInNeededLine(env, options)}`);
+    return undefined;
+  }
 
   const flagApp = (typeof options.app === 'string' && options.app.trim())
     ? options.app.trim()
@@ -1271,7 +1432,7 @@ export async function deploy(options = {}) {
 
   const credentials = platformCredentials(projectDir, env);
   if (!credentials) {
-    log('  You need to sign in first: run `npx piezas login`, then retry.\n');
+    log(`  ${signInNeededLine(env, options)}\n`);
     return { exitCode: 1, command: 'deploy', status: 'not-logged-in' };
   }
   const httpOptions = { token: credentials.cliToken, timeoutMs: options.httpTimeoutMs };
@@ -1948,7 +2109,7 @@ export async function envCmd(options = {}) {
 
   const credentials = platformCredentials(projectDir, env);
   if (!credentials) {
-    log('  You need to sign in first: run `npx piezas login`, then retry.\n');
+    log(`  ${signInNeededLine(env, options)}\n`);
     return { exitCode: 1, command: 'env', status: 'not-logged-in' };
   }
   const httpOptions = { token: credentials.cliToken, timeoutMs: options.httpTimeoutMs };

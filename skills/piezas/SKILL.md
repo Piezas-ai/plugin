@@ -30,23 +30,46 @@ these instructions say **piezas**. Never use `npx piezas`.
 If there is no such line, the Piezas checks are not running. Run
 `node --version`: if Node.js is missing, tell them in one sentence to install
 the LTS version from nodejs.org and restart, and build nothing until they have.
+If Node.js is there, the plugin's hooks are switched off or not yet trusted.
+Tell them plainly, in one or two sentences, how to turn them on, then build
+nothing until they have:
+- Codex desktop: Settings → Hooks → From Plugins → Piezas → Trust all, then
+  start a new chat.
+- Codex in a terminal: type `/hooks`, trust the Piezas hooks, then start a new
+  chat.
+- Claude Code: make sure the Piezas plugin is enabled (`/plugin`), then start a
+  new chat.
+Meanwhile the command is `node "<plugin folder>/vendor/piezas.mjs"`, where the
+plugin folder is two levels above this skill file (`skills/piezas/SKILL.md`),
+so signing in still works.
+
+**Network access (Codex):** Piezas commands talk to Piezas over the internet,
+and Codex's sandbox blocks the network by default. Ask for network access when
+you run a Piezas command, instead of letting the first try fail.
 
 ## Sign in first
 
 Everything real (creating the app, its settings, going live) needs their Piezas
 account. Your session context says whether this computer is signed in.
 
-- **Not signed in:** before any other step, run `piezas login` yourself with the
-  shell tool and a long timeout (up to 10 minutes). It opens their browser.
-  Tell them in one sentence: "Your browser is opening a Piezas page. Check the
-  code matches and click Approve." Wait for it to finish, then carry on.
-- If it fails or the code expires, say so in one sentence and run it again.
+- **Not signed in:** before any other step, sign them in, in two steps:
+  1. Run `piezas login --start` (add `--staging` if they asked for staging). It
+     prints a link and a code, then ends.
+  2. Straight away, post the link in the chat as a clickable link with the
+     code, in one sentence: "Open this link to sign in: [Sign in to
+     Piezas](<link>). Check the code says <code>, then click Approve."
+  3. Run `piezas login --wait` with a long timeout (up to 10 minutes). Do
+     nothing else until it reports that they are signed in.
+- If `--wait` says the code expired, say so in one sentence and start again
+  from step 1. If it says "not approved yet", run `piezas login --wait` again.
+- If a command says the saved sign-in is for the other Piezas (production vs
+  staging), sign them in again the same way, with the flag it names.
 - **Never carry on without an account.** Do not quietly switch to anything else.
 - To check at any time: `piezas whoami`.
 - **Staging (testing only):** if the person asks to use Piezas staging or the
-  test environment, sign in with `piezas login --staging` instead. Everything
+  test environment, sign in with `piezas login --start --staging` instead. Everything
   after that (creating the app, settings, deploy) goes to staging on its own.
-  `piezas login --production` switches back. Never suggest staging yourself.
+  `piezas login --start --production` switches back. Never suggest staging yourself.
 
 **Practice mode** is only for someone who explicitly asks to try Piezas without
 an account. Then add `--sandbox` to `piezas init`, and tell them once: "This is

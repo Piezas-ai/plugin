@@ -47,6 +47,7 @@ import {
   LOCAL_DB_PACKAGES,
   STATE_DIR,
   escapeForRegExp,
+  savedTarget,
 } from './constants.js';
 import {
   HARD_NO_CODES,
@@ -60,6 +61,7 @@ import {
 import {
   deploy,
   readCredentials,
+  signInMismatch,
   signInStatus,
   slugifyAppName,
 } from './platform.js';
@@ -294,7 +296,10 @@ export function isSandboxProject(projectDir) {
 }
 
 export function platformCredentials(projectDir, env) {
-  return isSandboxProject(projectDir) ? { ...SANDBOX_CREDENTIALS } : readCredentials(env);
+  if (isSandboxProject(projectDir)) return { ...SANDBOX_CREDENTIALS };
+  // A sign-in for the other Piezas (production vs staging) never counts.
+  if (signInMismatch(env)) return undefined;
+  return readCredentials(env);
 }
 
 export function platformFetch(projectDir, options) {
@@ -497,11 +502,13 @@ export function signInContext(env = process.env, cliPath) {
   if (status.signedIn) {
     return `Signed in to Piezas as ${status.email ?? 'unknown'}${status.tenantName ? ` (${status.tenantName})` : ''}.`;
   }
+  const flag = savedTarget(env) === 'staging' ? ' --staging' : '';
   return [
-    `Not signed in to Piezas${status.otherPiezas ? ` here (the saved sign-in is for ${status.otherPiezas})` : ''}.`,
-    `Before any Piezas step (creating the app, settings, deploy), run \`${cmd} login\` yourself with the shell tool and a long timeout (up to 10 minutes).`,
-    'It opens the person\'s browser. Tell them in one sentence: "Your browser is opening a Piezas page. Check the code matches and click Approve."',
-    'Wait for it to finish, then continue. Never carry on with a real Piezas step without an account.',
+    `Not signed in to Piezas${status.otherPiezas ? ` here (the saved sign-in is for ${status.otherPiezas}, not ${status.target})` : ''}.`,
+    `Before any Piezas step (creating the app, settings, deploy), sign them in: run \`${cmd} login --start${flag}\` (it needs network access; ask for it up front),`,
+    'then immediately post its link in the chat as a clickable Markdown link with the code: "Open this link to sign in: [Sign in to Piezas](<link>). Check the code says <code>, then click Approve."',
+    `Then run \`${cmd} login --wait\` with a long timeout and do not continue until it reports success; if the code expires, start again.`,
+    'Never carry on with a real Piezas step without an account.',
     'Only if the person explicitly asks to try without an account, use practice mode (init --sandbox) and say plainly that nothing real is created.',
   ].join(' ');
 }

@@ -369,6 +369,7 @@ export function help() {
   console.log('    npx piezas init [dir]            Set up Piezas in a project');
   console.log('    npx piezas login                 Sign in via your browser (device code)');
   console.log('    npx piezas login --staging       Sign in to Piezas staging (later commands follow; --production switches back)');
+  console.log('    npx piezas login --start / --wait  Two-step sign-in for AI tools: print the link and exit, then wait for approval');
   console.log('    npx piezas reports [--save]      New Report a problem reports (--save: into .piezas/reports/, marked received)');
   console.log('    npx piezas report-button on|off  Default answer for the next deploy\'s Report a problem question');
   console.log('    npx piezas logout                Remove the saved CLI session');
@@ -472,7 +473,7 @@ export const DEPLOY_FLAG_KEYS = new Set([
   'app', 'appsUrl', 'cmd', 'delete', 'dir', 'env', 'isolated', 'logs', 'mixed', 'reportButton', 'status',
 ]);
 export const ENV_FLAG_KEYS = new Set(['app', 'appsUrl', 'allowEmpty']);
-export const LOGIN_FLAG_KEYS = new Set(['apiBase', 'json', 'open', 'staging', 'production']);
+export const LOGIN_FLAG_KEYS = new Set(['apiBase', 'json', 'open', 'staging', 'production', 'start', 'wait']);
 export const SESSION_FLAG_KEYS = new Set(['json']);
 export const REPORTS_FLAG_KEYS = new Set(['json', 'save']);
 

@@ -1,6 +1,6 @@
 {
   "name": "piezas",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Build business apps with Piezas from Codex: plain-language interview, clickable preview, and guardrails that keep the app on Piezas.",
   "author": {
     "name": "Piezas.ai",
@@ -23,7 +23,9 @@
     "developerName": "Piezas.ai",
     "category": "Productivity",
     "defaultPrompt": [
-      "I want to build an app for my business"
-    ]
+      "Set up this folder for a new Piezas app"
+    ],
+    "logo": "./.claude-plugin/icon.png",
+    "composerIcon": "./.claude-plugin/icon.png"
   }
 }
