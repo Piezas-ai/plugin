@@ -20,28 +20,39 @@ and nothing is created or published.
 
 ## Install
 
-**Claude Code** (CLI, desktop Code tab or IDE extension):
+### Claude (desktop app, Claude Code)
 
-```
-/plugin marketplace add Piezas-ai/plugin
-/plugin install piezas@piezas
-```
+1. Open **Plugins**, choose **Add marketplace**, and enter `Piezas-ai/plugin`.
+2. Install **Piezas**.
+3. Start a new chat in an empty folder and say "Set up this folder for a new
+   Piezas app".
 
-**Codex:**
+In a terminal: `/plugin marketplace add Piezas-ai/plugin`, then
+`/plugin install piezas@piezas`.
 
-```
-codex plugin marketplace add Piezas-ai/plugin
-codex plugin add piezas@piezas
-```
+### Codex (desktop app, Codex CLI)
 
-**Turn on the checks in Codex.** Codex does not run a plugin's checks until
-you trust them. In Codex, open `/hooks`, review the Piezas hooks, and trust
-them. Do this again after each plugin update, because trust is tied to the
-exact version. Until you do, Piezas guidance still works but nothing stops a
-rule-breaking change while it is written. After
-installing, just describe what you want to build. In Claude Code, `/piezas:start`
-also works. Already have an app (for example from Lovable)? Say so, or use
-`/piezas:import`: Piezas copies it into a new folder and never changes the
+1. In the desktop app, choose **Add → Add a Marketplace**. For the source, enter
+   `https://github.com/Piezas-ai/plugin`; leave Git ref and sparse paths empty.
+2. Click **+** next to **Piezas** to install it.
+3. **Turn on the Piezas checks (required).** Codex does not run a plugin's
+   checks until you trust them. Open **Settings → Hooks → From Plugins →
+   Piezas** and choose **Trust all**. In the Codex CLI, open `/hooks` instead.
+4. Start a **new** chat in an empty folder and say "Set up this folder for a
+   new Piezas app".
+
+Without step 3, Piezas can still guide the AI, but nothing stops a
+rule-breaking change while it is written, and the AI will remind you to turn
+the checks on. Codex asks you to trust the checks again only when an update
+changes them.
+
+In a terminal: `codex plugin marketplace add Piezas-ai/plugin`, then
+`codex plugin add piezas@piezas`, then `/hooks` in Codex.
+
+### After installing
+
+Describe what you want to build. Already have an app (for example from
+Lovable)? Say so: Piezas copies it into a new folder and never changes the
 original.
 
 Requirements: **Node.js** (LTS). The plugin's checks run with Node.js; if it is

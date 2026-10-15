@@ -9,7 +9,7 @@
       "name": "piezas",
       "source": "./",
       "description": "Build business apps with Piezas: plain-language interview, clickable preview, built-in guardrails.",
-      "version": "0.5.2"
+      "version": "0.5.3"
     }
   ],
   "description": "The Piezas plugin for building business apps from Claude Code."

@@ -1,6 +1,6 @@
 {
   "name": "piezas",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Build business apps with Piezas from Codex: plain-language interview, clickable preview, and guardrails that keep the app on Piezas.",
   "author": {
     "name": "Piezas.ai",
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Piezas",
     "shortDescription": "Build business apps, guided",
-    "longDescription": "Describe the app in plain language, see a clickable preview, and build it on Piezas business capabilities. Guardrails keep the app's data, keys and approvals where they belong.",
+    "longDescription": "Describe the app in plain language, see a clickable preview, and build it on Piezas business capabilities. Guardrails keep the app's data, keys and approvals where they belong. After installing, turn the guardrails on: Settings → Hooks → From Plugins → Piezas → Trust all, then start a new chat.",
     "developerName": "Piezas.ai",
     "category": "Productivity",
     "defaultPrompt": [
