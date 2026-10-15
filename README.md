@@ -34,7 +34,11 @@ codex plugin marketplace add Piezas-ai/plugin
 codex plugin add piezas@piezas
 ```
 
-Codex asks once to trust the plugin's hooks; open `/hooks` to review them. After
+**Turn on the checks in Codex.** Codex does not run a plugin's checks until
+you trust them. In Codex, open `/hooks`, review the Piezas hooks, and trust
+them. Do this again after each plugin update, because trust is tied to the
+exact version. Until you do, Piezas guidance still works but nothing stops a
+rule-breaking change while it is written. After
 installing, just describe what you want to build. In Claude Code, `/piezas:start`
 also works. Already have an app (for example from Lovable)? Say so, or use
 `/piezas:import`: Piezas copies it into a new folder and never changes the
@@ -147,9 +151,15 @@ before the AI sees them.
 
 ## Honest limits
 
-- **Hooks are local.** A user can turn them off, and an agent outside these
-  two hosts never sees them. The final gate is still the server-side deploy
-  attestation.
+- **Hooks are local.** A user can turn them off or, in Codex, not trust them,
+  and an agent outside these two hosts never sees them. The final gate is still
+  the server-side deploy check.
+- **Not a security boundary.** A check that fails or times out lets the action
+  through, and some actions are not checked at all (for example web searches,
+  or input typed into an already-running command). The checks keep an AI tool
+  on track; they do not replace review.
+- **Codex's public plugin directory** does not accept plugins with hooks yet,
+  so in Codex this plugin is installed from this repository (see Install).
 - **Plain chat can't build.** Claude.ai web chat and ChatGPT chat cannot write
   files, so they cannot build. Building needs Claude Code (including the desktop
   app's Code tab) or Codex.
