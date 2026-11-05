@@ -48,7 +48,9 @@ stable across the whole contract; they are grouped here by topic.
   slot computation. The slots endpoint uses its `slot_duration` query param
   (default 30); the booking-time re-check uses `availability.slotDurationMinutes`
   (default: the start/end span). Send the value you mean to both.
-- **Rule 4 — Branch on status codes, never on error text.** Error strings (e.g. the
-  booking 409 messages) are human documentation and may change; they carry no
-  stable machine code yet. A 409 on booking = the time is taken → re-fetch
-  slots and offer alternatives.
+- **Rule 4 — Branch on `error.code`, never on error text.** Error strings (e.g. the
+  booking 409 messages) are human documentation and may change. Every
+  `@piezas/sdk` (0.4+) error carries a stable `code` (`conflict`, `not_found`,
+  `validation_failed`, `rate_limited`, ...); HTTP errors also keep `status`. A
+  booking 409 (`code: 'conflict'`) = the time is taken → re-fetch slots and
+  offer alternatives.

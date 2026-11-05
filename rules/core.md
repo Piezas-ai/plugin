@@ -2,48 +2,53 @@
 
 ### Core Rules
 
-The non-negotiables. Each is expanded, with examples, in the slice named after it.
-
-- **Ownership boundary.** The app owns UI, routes, session glue, and workflow
-  decisions. Piezas owns business records, pipelines, tasks, calendars,
-  notifications, documents, integrations, and end-user accounts. Never create a
-  local database table for a Piezas-backed business object. (`entities`)
-- **Secrets stay server-side.** Read `PIEZAS_API_KEY` from `process.env` on the
-  server only — never in browser code, never behind a public-env prefix
-  (`NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`) — keep `.env` in `.gitignore`, and declare
-  every other required runtime var in `deploy.requiredEnv`. (`deploy`)
-- **No provider tokens in the app.** OAuth access/refresh tokens, provider client
-  secrets, and sync cursors stay in Piezas Integrations; store connection and
-  grant IDs only. (`integrations`)
-- **Credentials live in the users service.** Passwords, hashes, reset tokens,
-  session secrets, and second-factor material never go in entity records or an
-  app table. (`users`)
-- **Per-member isolation is YOUR job.** Derive `owner_id` from your verified app
-  session, filter every read by it, 404 other members' resources. The platform
-  does not do it for you. (`users`)
-- **Spec first.** Write `SPEC.md`, with an `S-xxx` acceptance scenario per
-  requirement, before any app code. Do not make the customer read it: show a
-  short summary with your assumptions flagged; they confirm the spec by
-  approving the mock. (`testing`)
-- **Mock first.** Milestone 0 is UI plus seed data, deployed or served for the
-  customer to react to, before any backend wiring. Do not call a Piezas service
-  until they have reacted to it. (`testing`)
-- **Scenario coverage before ship.** Every `S-xxx` has a
-  `tests/scenarios/S-xxx.spec.*` Playwright test selecting by `data-testid`; the
-  suite is green before any deploy; `piezas test` writes the attestation the
-  deploy carries. (`testing`)
-- **Fetch the slice before you use a service.** Before writing code against
-  entities, users, calendar, documents or integrations — and before deploying —
-  call `piezas_contract` with that `topic`. Working from memory is how apps end up
-  with a parallel database. Slices: `core`, `entities`, `users`, `integrations`,
-  `calendar`, `documents`, `deploy`, `testing`, `patterns`.
+- **You advise; the owner decides.** Explain risks simply, recommend;
+  never refuse the owner's choice or leave them at a dead end. Only the
+  owner's own reply ("deploy anyway", "allow outside changes"; for the
+  quality scan, "accept N", "go live without the scan" or "quality scan
+  off") overrides a Piezas pause, never yours.
+- **Plain words for the owner.** Brief and actionable: what happened, then
+  the choice with the exact reply. No jargon, no long lists. (`testing`)
+- **The AI fixes first; the owner is asked once**, for what only they can
+  answer: one pause, remembered per item. (`testing`)
+- **Ownership boundary.** The app owns UI, routes, session glue and workflow.
+  Piezas owns records, pipelines, tasks, calendars, notifications, documents,
+  integrations and end-user accounts. (`entities`)
+- **Secrets stay server-side.** `PIEZAS_API_KEY` never behind
+  `NEXT_PUBLIC_`/`VITE_`/`PUBLIC_`; `.env` in `.gitignore`; other settings
+  in `deploy.requiredEnv`/`optionalEnv`. (`deploy`)
+- **No provider tokens in the app.** Store connection and grant IDs only.
+  Integrations never sign people in: Google/Microsoft sign-in is
+  `@piezas/sdk/sso`. (`users`)
+- **Credentials live in the users service**, never in records. (`users`)
+- **Per-member isolation is YOUR job.** Derive `owner_id` from the verified
+  session; filter every read by it. (`users`)
+- **Spec first, mock first.** `SPEC.md` with an `S-xxx` scenario per
+  requirement; then UI plus seed data, before any backend wiring. (`testing`)
+- **Tested before shared.** Every `S-xxx` is a Playwright test
+  (`tests/scenarios/S-xxx-<name>.spec.ts`, by `data-testid`). Run `piezas
+  test`, fix, re-run (3 rounds) without asking; never weaken a check without
+  the owner's OK. (`testing`)
+- **Fetch the slice before using a service** (and before deploying):
+  `piezas_contract` with its `topic`.
+- **Rule 11 — If Piezas doesn't offer it, say so.** Check
+  `piezas_capabilities` (.piezas/rules/capabilities.json) before promising.
+  If it's missing, say so with the workable options, recommend one, then
+  follow the owner's choice. Don't change Piezas's code (backend, SDK, CLI,
+  MCP) or invent endpoints unless the owner explicitly asks, knowing the risk.
+- **Change only the app's folder.** Use the published `@piezas/sdk`; no
+  homemade copy, and no Piezas address outside this contract. Once they know
+  the risk, only the owner may type "allow outside changes".
 
 ### Hard No List
 
+Never do these on your own. If the owner asks, explain the risk and recommend
+the Piezas way; a deploy that breaks one pauses until the owner fixes it or
+says "deploy anyway".
+
 - No local database tables for Piezas-backed business objects.
-- No OAuth token storage in the app.
-- No provider callback handlers for integration OAuth unless Piezas explicitly requires a return page for UI only.
-- No background token refresh jobs in the app.
-- No scraping or undocumented provider API calls when a Piezas connector/action exists.
+- No OAuth token storage, token refresh jobs, or integration OAuth callbacks in the app.
+- No scraping or undocumented provider API calls when a Piezas connector exists.
 - No exposing `PIEZAS_API_KEY` to browser code.
 - No public MCP route without app auth, tenant checks, and server runtime.
+- No hand-written OAuth/OIDC sign-in (use `@piezas/sdk/sso`).

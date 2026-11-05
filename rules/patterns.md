@@ -11,7 +11,7 @@ const adapter = createPiezasServerAdapter({
   apiKey: process.env.PIEZAS_API_KEY!,
   rules: [
     { service: 'entities', methods: ['GET', 'POST'], path: /^\/v1\/records/ },
-    { service: 'calendar', method: 'GET', path: '/v1/public/slots' },
+    { service: 'calendar', method: 'GET', path: '/v1/availability/slots' },
   ],
 });
 
@@ -24,9 +24,13 @@ Do not expose a generic path parameter like `/api/piezas/[...path]` unless every
 
 ### Report a Problem Button
 
-Every app with a server gets a small "Report a problem" button in the bottom-left corner. Anyone using the app can drag it out of the way or click it to say what went wrong. Each report carries a screenshot of what the person saw (they can leave it out), the window size, and the page's last errors and failed requests. Reports are saved in the app's own records (entity `problem_reports`, status `new`), screenshots in the app's own Documents; `npx piezas reports --save` writes each one to `.piezas/reports/<id>.md` and `<id>.jpg`. When fixing a report, look at its screenshot first.
+Every app with a server gets a small "Report a problem" button in the bottom-left corner. Anyone using the app can drag it out of the way or click it to say what went wrong. It is on every screen, including the sign-in screen, and never depends on being signed in; the smoke test checks it is visible on the first screen before anyone signs in. Each report carries a screenshot of what the person saw (they can leave it out), the page address without its query string or fragment (those can hold private details), the window size, and the page's last errors and failed requests. The button stays on the page even when the app crashes. Reports are saved in the app's own records (entity `problem_reports`, status `new`), screenshots in the app's own Documents.
 
-Always add the button; never remove it from the code to turn it off. On or off is the owner's answer on every deploy: `piezas deploy --report-button on|off` sets the hosted setting `PIEZAS_REPORT_BUTTON`, and the app reads it at run time. Never answer that question for the owner.
+Each report also says who sent it, worked out by the app's server and never taken from the browser: the signed-in account when the app uses Piezas sign-in; otherwise an optional name or email the person types, marked as not verified. Apps with their own sign-in pass `identify` to `createReportProblemRoute` (it returns the signed-in person's `{ id, email, name }` from the app's own session, or null).
+
+When the owner asks to pull or fix the reported problems: run `npx piezas reports --save` (each report goes to `.piezas/reports/<id>.md` and `<id>.jpg`); for each one, look at the screenshot first, then read the report; fix it and test the fix; then run `npx piezas reports --done <id>` for each fixed one (several: `--done <id>,<id>`). A report keeps showing until it is marked done, so never mark one done without a fix. Then redeploy.
+
+`piezas init`, the start of the build and `piezas test` add the button to a Next.js app themselves (`piezas report-button add` does it on demand); a deploy of a server app without it (doctor PZ027) stops for you first: run `piezas report-button add`, rebuild, deploy again. Only if that did not work does it reach the owner, inside the one pause. Always add the button; never remove it from the code to turn it off. On or off is never asked: a deploy keeps the app's setting (a first deploy: on; a value set in the console is never overwritten), and the app reads the hosted setting `PIEZAS_REPORT_BUTTON` at run time. Only when the owner asks to change it: `piezas report-button on|off` (or `report_button` on `piezas_deploy`).
 
 ```tsx
 // app/api/piezas/report/route.ts
@@ -38,10 +42,10 @@ export const { GET, POST } = createReportProblemRoute({ piezas });
 ```tsx
 // app/report-problem.tsx
 'use client';
-import { useEffect } from 'react';
 import { mountReportProblem } from '@piezas/sdk/report-problem';
+// Mounted when this file loads, outside React, so the button outlives a crash.
+if (typeof window !== 'undefined') mountReportProblem();
 export function ReportProblem() {
-  useEffect(() => mountReportProblem(), []);
   return null;
 }
 // app/layout.tsx: render <ReportProblem /> once inside <body>.

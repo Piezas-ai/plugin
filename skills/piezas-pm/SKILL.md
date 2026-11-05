@@ -83,6 +83,14 @@ Rules the checker enforces (`npx piezas spec check`):
 Write scenarios about observable behaviour — what the user would see happen.
 Never about implementation.
 
+Every scenario becomes a check the app must pass before it goes live, so also
+write `## Data` (one line per kind of record with its fields, e.g.
+`- Contact: name, email, phone`) and give any scenario that depends on an
+outside service (Google/Microsoft sign-in, payments, a real inbox,
+another company's system) a `needs: <service>` line. Ask the user in plain
+words for a test account for it; they set any password themselves, never in
+chat.
+
 ## 4. Let the verdict drive the work
 
 After every meaningful edit to `SPEC.md`, run `npx piezas spec check` and work

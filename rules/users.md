@@ -22,9 +22,9 @@ it.
 - **New accounts land `pending`, not `active` — plan for it.** The default
   policy requires email verification: after `signUp` the account CANNOT sign
   in until the verification flow completes (request → emailed token →
-  confirm), and a pending account's sign-in fails with the same generic 401
-  as a wrong password (a distinct `account_pending` code is rolling out
-  server-side). Either implement the verification flow, or — for apps that
+  confirm). A pending account's sign-in with the right password fails with
+  `code: 'account_pending'`; a wrong password is `code: 'invalid_credentials'`
+  (branch on `error.code`, @piezas/sdk 0.4+). Either implement the verification flow, or — for apps that
   don't want it — call `users.configurePolicy(appId,
   { requireEmailVerification: false })` BEFORE the first sign-up. The policy
   is read at sign-up time: flipping it later does NOT activate
@@ -60,6 +60,55 @@ it.
   'optional' (default) challenges enrolled users; 'required' additionally
   signals your app to push enrollment (un-enrolled users still sign in —
   driving them to enroll is YOUR job, the platform will not brick them).
+
+### Sign in with Google or Microsoft (SSO)
+
+Piezas sign-in is email and password (with verification and MFA). For "Sign
+in with Google" and/or "Sign in with Microsoft", use `@piezas/sdk/sso`
+(server side only). Never write your own OAuth/OIDC code, and never store the
+client secrets anywhere but the app's hosting environment variables — never in
+code, a committed file, chat, or Piezas Integrations (Integrations are for
+using a provider's data, not for signing people in). The owner creates the
+Google OAuth client (Google Cloud Console) and/or Microsoft app registration
+(Microsoft Entra) and sets the values themselves in the Piezas console → app →
+Hosting -> Environment; you give them, in plain words, the exact redirect
+URI(s) (`https://<app address>/api/auth/sso/google/callback`,
+`https://<app address>/api/auth/sso/microsoft/callback`) and the variable
+names: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` for Google;
+`MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` and `MICROSOFT_TENANT_ID`
+(their organization's tenant id or domain, recommended; `organizations` allows
+any work or school account) for Microsoft. That is all the owner sets.
+`PIEZAS_SSO_SECRET` and `PIEZAS_APP_URL` are optional (advanced): without
+`PIEZAS_SSO_SECRET` the SDK derives the sign-in key from the app's
+`PIEZAS_API_KEY` (so replacing that key signs SSO users out; they sign in
+again), and on Piezas hosting the app's address is known without
+`PIEZAS_APP_URL`. Don't list the provider variables in `deploy.requiredEnv`
+(list them in `deploy.optionalEnv`, which satisfies doctor and is never
+checked at deploy): the app runs without them, and a visitor who tries that sign-in sees a plain
+"Sign-in with Google isn't set up yet" message (`sso_error=not_configured`).
+Never ask whether the provider variables are set: the deploy compares the
+names and, while they are missing, says in one line that Google (or
+Microsoft) sign-in stays off until they are set; never ask for the values in
+the chat. Ask the owner which provider (or both) and whether to limit sign-in
+to their organization's domain, offering the default ("@<their sign-in
+domain> only?"); an `allow` rule (`emails`, `domains` or `isAllowed`) is
+required. Apps using SSO derive member identity from `getSsoSession` /
+`sso.getSession(request)` (verified) per Rule 1, never from anything the
+browser sends. Piezas email sign-in remains available alongside. SSO users
+are not listed in the console's user list.
+
+```typescript
+// lib/sso.ts
+import { createSsoRoutes } from '@piezas/sdk/sso';
+export const sso = createSsoRoutes({
+  providers: { google: {}, microsoft: {} },   // reads the env vars above
+  allow: { domains: ['example.com'] },
+});
+// app/api/auth/sso/[...sso]/route.ts
+export const { GET, POST } = sso;
+// sign-in links: /api/auth/sso/google/start?returnTo=/dashboard
+// sign-out: POST /api/auth/sso/sign-out
+```
 
 ### Platform Contract Rules - Identity, Sessions, and Credentials
 

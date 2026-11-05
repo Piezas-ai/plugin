@@ -18,6 +18,17 @@ sign-in covers creating the app, its settings and going live. Want to try first
 without an account? Ask for practice mode: everything runs on a simulated Piezas
 and nothing is created or published.
 
+**You decide.** The AI explains risks in plain words and recommends, but every
+pause offers you a way through. It changes only the app's own folder and uses
+the published Piezas toolkit as it is. If Piezas is missing something, it tells
+you what is missing and your options, recommends one, and follows your choice.
+To let it change files elsewhere, or the Piezas toolkit copy, for one session,
+you (only you) type **allow outside changes**. When a deploy pauses (a Piezas
+rule, checks that have not passed, a homemade toolkit copy, a missing Report a
+problem button, settings not set yet), you can still reply **deploy anyway**.
+Before promising you a feature, it checks what Piezas can do
+(`rules/capabilities.json`).
+
 ## Install
 
 ### Claude (desktop app, Claude Code)
@@ -106,7 +117,7 @@ skills/piezas/SKILL.md                          front door: the four steps, plai
 skills/piezas-pm/SKILL.md                       the requirements interview
 skills/piezas-spec/SKILL.md                     spec mode (runs the spec command init installed)
 commands/*.md                                   Claude Code slash commands (Codex uses the skills)
-hooks/hooks.json, hooks/hook.mjs                one hook entry for both hosts
+hooks/hooks.json, hooks/*.mjs                   one hook entry for both hosts (wraps vendor/hookentry.js)
 vendor/piezas.mjs, vendor/*.js                  the Piezas CLI, bundled (its source modules)
 rules/*.md                                      the Piezas rules, by topic
 ```
@@ -121,6 +132,12 @@ other events run `hooks/hook.mjs`, which only adds context for the AI. `vendor/`
 the readable source of the open `piezas` command-line tool (its modules, plus
 the `vendor/piezas.mjs` entry), copied in so nothing is downloaded at run time. The checks on each change run entirely on your
 computer; your code is not sent anywhere for them.
+
+A project set up with `npx piezas init` also has the same checks as its own
+hooks (`.claude/settings.json`, `.codex/hooks.json`). When both run, each event
+is answered once: a small marker file per event and per session in the OS temp
+folder (`piezas-hooks/`, cleared after a day) tells the second one to stay
+silent.
 
 **Talks to these Piezas addresses, and nothing else of its own:**
 

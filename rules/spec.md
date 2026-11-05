@@ -21,21 +21,14 @@ Your job is to produce a buildable spec before implementation starts. Do not wri
 
 Before asking product questions:
 
-1. If `.spec-interview-state.md` exists, read it, summarize what is already captured, and ask whether to resume or start fresh.
+1. If `.spec-interview-state.md` exists, read it and resume; say so in one line ("Picking up where we left off: …"). "Start over" is the user's to say.
 2. If arguments were provided, treat them as the user's starting idea. Do not ask "what are you building?" cold.
 3. If the repository is not empty, quickly inspect the top-level README, package manifest, `piezas.manifest.json`, and generated Piezas instructions. Treat repo findings as clues, not final truth.
 4. If `.piezas/spec-builder.md` exists, this file is the source of truth for spec mode.
 
-## First Question
+## Quick Version by Default
 
-Ask one framing question first:
-
-Do you want a rough MVP spec or a production handoff spec?
-
-- MVP: short interview, strong defaults, just enough to prototype.
-- Production handoff: deeper requirements, stronger security/privacy/integration detail, clearer acceptance criteria.
-
-Tell the user they can switch modes later. Ask one question at a time and wait for the answer.
+Do not ask "MVP or production handoff?". Write the quick first version (MVP: short interview, strong defaults, just enough to prototype). Write the production handoff (deeper requirements, stronger security/privacy/integration detail, clearer acceptance criteria) only when the user mentions a developer, an agency or handing the app over. Ask one question at a time and wait for the answer.
 
 ## Interview Rules
 
@@ -90,20 +83,9 @@ The generated app should own UI, routing, auth/session glue, page-specific orche
 
 If a needed capability is missing from Piezas, mark it as a gap in the spec instead of silently designing a parallel backend.
 
-## Before Writing
-
-Before creating files, summarize:
-
-- What the user stated.
-- What you are assuming by default.
-- The proposed Piezas service mapping.
-- The explicit non-goals.
-
-Ask the user to confirm or correct the summary. Wait for confirmation.
-
 ## Write The Spec
 
-After confirmation, write the spec into the repository.
+When the interview is done, write the spec into the repository. Do not ask the user to confirm or correct a summary first, and do not end with "Right?" or "Want to see it?": the mock (preview) and their "approve" are the one confirmation. After writing, tell them in a few plain lines what the app does, what you assumed (as statements, so they can correct them at the preview), and go straight to the mock.
 
 Rules:
 
@@ -157,12 +139,9 @@ Use these sections for `SPEC.md`, or distribute them across the split files:
 
 ## Design Prompt (optional)
 
-After the spec files are written, ask exactly one more question:
-
-> "Want a paste-ready design prompt for Claude (or another design tool) to
-> create the design brief and UI scaffolding from this spec?"
-
-If yes, write `DESIGN_PROMPT.md` next to the spec — one self-contained prompt
+Do not offer a design prompt: you build the preview (the mock) yourself. Only
+when the user asks for one, or when this tool cannot build the preview, write
+`DESIGN_PROMPT.md` next to the spec, without asking — one self-contained prompt
 the user can paste into a design-capable model. Derive everything from the
 spec; ask nothing new. The prompt must include:
 
@@ -179,8 +158,6 @@ spec; ask nothing new. The prompt must include:
    spacing/layout system) first, then UI scaffolding for every screen.
 8. Constraints: responsive, accessible contrast, and the spec's v1 non-goals
    restated so the design does not invent screens the spec excluded.
-
-If no, skip it and do not write the file.
 
 ## Completion
 

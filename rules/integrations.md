@@ -2,15 +2,17 @@
 
 ### Integrations Pattern
 
+Integrations are for using a provider's data, never for signing people in. For "Sign in with Google / Microsoft", use `@piezas/sdk/sso` (topic `users`); nothing in Integrations does sign-in.
+
 Use Piezas Integrations for provider data access such as Google Calendar, Zoom, HubSpot, Slack, and similar systems. The app may render connect/status UI, but Piezas owns OAuth client config, callbacks, encrypted provider tokens, refresh, connection status, grants, normalized actions, proxy guardrails, and app-level integration policy.
 
-Piezas integrations are app-scoped when the generated product has its own domain, callback URL, provider client credentials, or permission purpose. A booking app that needs Google Calendar access and a separate internal app that only needs Google identity should be separate tenant app records with separate allowed origins, redirect URIs, connector/purpose policy, and provider config. Store the Piezas tenant app slug/id in setup code and pass it as `appId` in SDK calls or `app_id` in REST calls.
+Piezas integrations are app-scoped when the generated product has its own domain, callback URL, provider client credentials, or permission purpose. Two apps that each use Google Calendar (say, a booking app and a separate staff scheduler) should be separate tenant app records with separate allowed origins, redirect URIs, connector/purpose policy, and provider config. Store the Piezas tenant app slug/id in setup code and pass it as `appId` in SDK calls or `app_id` in REST calls.
 
 Recommended flow:
 
 1. List connectors and available actions.
 2. Create or verify the Piezas tenant app through Admin/access with allowed origins, allowed redirect URIs, `authPolicy`, and `integrationPolicy`.
-3. Save provider client credentials through Piezas Integrations using `appId` and `purpose` when the app needs its own OAuth provider app.
+3. Only when the app needs its own branded consent screen for a data connector: save that connector's provider client credentials through Piezas Integrations using `appId` and `purpose`. This never enables sign-in.
 4. Start OAuth through Piezas with `appId`, `purpose`, `returnUrl`, and the app user ID.
 5. Store returned connection IDs as references.
 6. For public or organizer-owned workflows, create a scoped grant and store the grant ID.
